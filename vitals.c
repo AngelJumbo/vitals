@@ -22,6 +22,28 @@ void draw_bars_perc(List *list, int width, int height, int min_x, int min_y );
 void draw_scale_bars(List *list, int width, int height, int min_x, int min_y);
 
 
+typedef enum { BOX, VBOX, HBOX } ContainerType;
+
+typedef struct Container {
+    ContainerType type;
+    union {
+        struct { 
+            List *list; 
+            char *title; 
+            draw_bars draw_func; 
+        } box;
+        struct { 
+            struct Container **children; 
+            int count; 
+        } group;
+    };
+} Container;
+
+void renderVBox(int x, int y, int width, int height, Container *container);
+
+void renderHBox(int x, int y, int width, int height, Container *container);
+
+
 
 int main(int argc, char *argv[]) {
   tb_init();
@@ -43,6 +65,18 @@ int main(int argc, char *argv[]) {
   get_active_interface(active_interface, sizeof(active_interface));
   unsigned long download_speed, upload_speed;
 
+  Container cpu_box = {BOX, .box = {cpu_list, cpu_title, draw_bars_perc}};
+  Container mem_box = {BOX, .box = {mem_list, mem_title, draw_bars_perc}};
+  Container net_up_box = {BOX, .box = {net_up_list, net_up_title, draw_scale_bars}};
+  Container net_down_box = {BOX, .box = {net_down_list, net_down_title, draw_scale_bars}};
+
+  Container *hbox_children[] = {&net_up_box, &net_down_box};
+  Container hbox_net = {HBOX, .group = {hbox_children, 2}};
+
+  Container *vbox_children[] = {&cpu_box, &mem_box, &hbox_net};
+  Container vbox_main = {VBOX, .group = {vbox_children, 3}};
+  
+  short first_read=0; 
   while (1) {
     
     int new_width = tb_width();
@@ -72,12 +106,15 @@ int main(int argc, char *argv[]) {
     format_speed(speed_str, sizeof(speed_str), download_speed);
     sprintf(net_down_title,"NET DOWN: %s",speed_str);
 
+    renderVBox(0, 0, width, height, &vbox_main);
+  
+    /*
     int height_box = height/3;
     draw_bars_box(0,0,width,height_box,cpu_list,cpu_title,draw_bars_perc);
     draw_bars_box(0,height_box,width,height_box*2,mem_list,mem_title,draw_bars_perc);
     draw_bars_box(0,height_box*2,width/2,height_box*3,net_up_list,net_up_title,draw_scale_bars);
     draw_bars_box(width/2,height_box*2,width,height_box*3,net_down_list,net_down_title,draw_scale_bars);
-
+*/
 
     tb_printf(width-NAME_STR_LEN(APP_VERSION), height-1, TB_DEFAULT, TB_DEFAULT, APP_VERSION);
     tb_printf(0, height-1, TB_DEFAULT, TB_DEFAULT, APP_NAME);
@@ -192,3 +229,34 @@ void draw_scale_bars(List *list, int width, int height, int min_x, int min_y) {
     x++;
   }
 }
+
+void renderVBox(int x, int y, int width, int height, Container *container) {
+    int box_height = height / container->group.count;
+    for (int i = 0; i < container->group.count; i++) {
+        Container *child = container->group.children[i];
+        if (child->type == BOX) {
+            draw_bars_box(x, y + i * box_height, x + width, y + (i + 1) * box_height,
+                          child->box.list, child->box.title, child->box.draw_func);
+        } else if (child->type == HBOX) {
+            renderHBox(x, y + i * box_height, width, box_height, child);
+        } else if (child->type == VBOX) {
+            renderVBox(x, y + i * box_height, width, box_height, child);
+        }
+    }
+}
+
+void renderHBox(int x, int y, int width, int height, Container *container) {
+    int box_width = width / container->group.count;
+    for (int i = 0; i < container->group.count; i++) {
+        Container *child = container->group.children[i];
+        if (child->type == BOX) {
+            draw_bars_box(x + i * box_width, y, x + (i + 1) * box_width, y + height,
+                          child->box.list, child->box.title, child->box.draw_func);
+        } else if (child->type == HBOX) {
+            renderHBox(x + i * box_width, y, box_width, height, child);
+        } else if (child->type == VBOX) {
+            renderVBox(x + i * box_width, y, box_width, height, child);
+        }
+    }
+}
+
