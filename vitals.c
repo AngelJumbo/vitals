@@ -17,7 +17,7 @@ char *box[8] = {"╒", "╕", "╘", "╛", "═", "│","╡","╞"};
 
 typedef void (*draw_bars)(List *, int, int, int, int);
 
-void draw_bars_box(int x,int y,int x2,int y2,List *list, char *title, draw_bars draw_b);
+void draw_box(int x,int y,int x2,int y2,List *list, char *title, draw_bars draw_b);
 void draw_bars_perc(List *list, int width, int height, int min_x, int min_y );
 void draw_scale_bars(List *list, int width, int height, int min_x, int min_y);
 
@@ -39,10 +39,11 @@ typedef struct Container {
     };
 } Container;
 
-void renderVBox(int x, int y, int width, int height, Container *container);
+void container_render_vbox(int x, int y, int width, int height, Container *container);
 
-void renderHBox(int x, int y, int width, int height, Container *container);
+void container_render_hbox(int x, int y, int width, int height, Container *container);
 
+void container_render(int x, int y, int width, int height, Container *container) ;
 
 
 int main(int argc, char *argv[]) {
@@ -70,13 +71,13 @@ int main(int argc, char *argv[]) {
   Container net_up_box = {BOX, .box = {net_up_list, net_up_title, draw_scale_bars}};
   Container net_down_box = {BOX, .box = {net_down_list, net_down_title, draw_scale_bars}};
 
-  Container *hbox_children[] = {&net_up_box, &net_down_box};
-  Container hbox_net = {HBOX, .group = {hbox_children, 2}};
+  Container *vbox_net_children[] = {&net_up_box, &net_down_box};
+  Container vbox_net = {VBOX, .group = {vbox_net_children, 2}};
 
-  Container *vbox_children[] = {&cpu_box, &mem_box, &hbox_net};
+  Container *vbox_children[] = {&cpu_box, &mem_box, &vbox_net};
   Container vbox_main = {VBOX, .group = {vbox_children, 3}};
   
-  short first_read=0; 
+  short first_read=1; 
   while (1) {
     
     int new_width = tb_width();
@@ -95,10 +96,11 @@ int main(int argc, char *argv[]) {
     // Add new ram usage percentage
     list_append_int(mem_list, mem_perc());
     // Add new net upload speed
-    list_append_u_long(net_up_list,upload_speed);
+    list_append_u_long(net_up_list, first_read?0: upload_speed);
     // Add new net download speed
-    list_append_u_long(net_down_list,download_speed);
-    
+    list_append_u_long(net_down_list, first_read?0: download_speed);
+    if(first_read) first_read=0;
+
     sprintf(cpu_title,"CPU: %i%%",node_get_int(cpu_list->last));
     sprintf(mem_title,"RAM: %i%%",node_get_int(mem_list->last));
     format_speed(speed_str, sizeof(speed_str), upload_speed);
@@ -106,14 +108,14 @@ int main(int argc, char *argv[]) {
     format_speed(speed_str, sizeof(speed_str), download_speed);
     sprintf(net_down_title,"NET DOWN: %s",speed_str);
 
-    renderVBox(0, 0, width, height, &vbox_main);
+    container_render(0, 0, width, height, &vbox_main);
   
     /*
     int height_box = height/3;
-    draw_bars_box(0,0,width,height_box,cpu_list,cpu_title,draw_bars_perc);
-    draw_bars_box(0,height_box,width,height_box*2,mem_list,mem_title,draw_bars_perc);
-    draw_bars_box(0,height_box*2,width/2,height_box*3,net_up_list,net_up_title,draw_scale_bars);
-    draw_bars_box(width/2,height_box*2,width,height_box*3,net_down_list,net_down_title,draw_scale_bars);
+    draw_box(0,0,width,height_box,cpu_list,cpu_title,draw_bars_perc);
+    draw_box(0,height_box,width,height_box*2,mem_list,mem_title,draw_bars_perc);
+    draw_box(0,height_box*2,width/2,height_box*3,net_up_list,net_up_title,draw_scale_bars);
+    draw_box(width/2,height_box*2,width,height_box*3,net_down_list,net_down_title,draw_scale_bars);
 */
 
     tb_printf(width-NAME_STR_LEN(APP_VERSION), height-1, TB_DEFAULT, TB_DEFAULT, APP_VERSION);
@@ -135,7 +137,7 @@ int main(int argc, char *argv[]) {
 
 }
 
-void draw_bars_box(int x,int y,int x2,int y2,List *list, char* title, draw_bars draw_b){
+void draw_box(int x,int y,int x2,int y2,List *list, char* title, draw_bars draw_b){
   short skipLine = 0;
   int hLine = (y2 - y)/2 + y -1;
 
@@ -205,12 +207,13 @@ void draw_scale_bars(List *list, int width, int height, int min_x, int min_y) {
     free(old_node);
     list->count--;
   }
-  unsigned long max_value=0;
+  unsigned long max_value=1;
   Node *node = list->first;
   while (node != NULL) {
     max_value=node_get_u_long(node) > max_value? node_get_u_long(node) : max_value;
     node = node->next;
   }
+  
 
   int x = width - list->count;
   node = list->first;
@@ -230,33 +233,30 @@ void draw_scale_bars(List *list, int width, int height, int min_x, int min_y) {
   }
 }
 
-void renderVBox(int x, int y, int width, int height, Container *container) {
-    int box_height = height / container->group.count;
-    for (int i = 0; i < container->group.count; i++) {
-        Container *child = container->group.children[i];
-        if (child->type == BOX) {
-            draw_bars_box(x, y + i * box_height, x + width, y + (i + 1) * box_height,
-                          child->box.list, child->box.title, child->box.draw_func);
-        } else if (child->type == HBOX) {
-            renderHBox(x, y + i * box_height, width, box_height, child);
-        } else if (child->type == VBOX) {
-            renderVBox(x, y + i * box_height, width, box_height, child);
-        }
+void container_render(int x, int y, int width, int height, Container *container) {
+    if (container->type == BOX) {
+        draw_box(x, y, x + width, y + height, container->box.list, container->box.title, container->box.draw_func);
+    } else if (container->type == HBOX) {
+        container_render_hbox(x, y, width, height, container);
+    } else if (container->type == VBOX) {
+        container_render_vbox(x, y, width, height, container);
     }
 }
 
-void renderHBox(int x, int y, int width, int height, Container *container) {
+
+void container_render_vbox(int x, int y, int width, int height, Container *container) {
+    int box_height = height / container->group.count;
+    for (int i = 0; i < container->group.count; i++) {
+        Container *child = container->group.children[i];
+        container_render(x, y + i * box_height, width, box_height, child);
+    }
+}
+
+void container_render_hbox(int x, int y, int width, int height, Container *container) {
     int box_width = width / container->group.count;
     for (int i = 0; i < container->group.count; i++) {
         Container *child = container->group.children[i];
-        if (child->type == BOX) {
-            draw_bars_box(x + i * box_width, y, x + (i + 1) * box_width, y + height,
-                          child->box.list, child->box.title, child->box.draw_func);
-        } else if (child->type == HBOX) {
-            renderHBox(x + i * box_width, y, box_width, height, child);
-        } else if (child->type == VBOX) {
-            renderVBox(x + i * box_width, y, box_width, height, child);
-        }
+        container_render(x + i * box_width, y, box_width, height, child);
     }
 }
 
