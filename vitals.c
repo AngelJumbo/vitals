@@ -1,7 +1,7 @@
-#include "modules.h"
-#include "utils.h"
 #define TB_IMPL
 #include "termbox.h"
+#include "modules.h"
+#include "utils.h"
 #define MAX_DISKS 8
 #define NAME_STR_LEN(s) (sizeof(s) - 1) 
 #define APP_NAME " vitals "

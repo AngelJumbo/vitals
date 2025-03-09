@@ -61,7 +61,6 @@ void get_network_speed( unsigned long *rx_speed, unsigned long *tx_speed, char *
     static unsigned long tx2 = 0;
     
     get_network_usage(&rx2, &tx2, net_interface);
-    unsigned long res[2]={0};
 
     if(!first_read){
       *rx_speed = rx2 - rx1;
