@@ -54,6 +54,7 @@ void get_network_usage(unsigned long *rx_bytes, unsigned long *tx_bytes, char *n
 
 // Function to calculate network speed (bytes per second)
 void get_network_speed( unsigned long *rx_speed, unsigned long *tx_speed, char *net_interface) {
+    static short first_read = 1;
     static unsigned long rx1 = 0;
     static unsigned long tx1 = 0;
     static unsigned long rx2 = 0;
@@ -62,8 +63,14 @@ void get_network_speed( unsigned long *rx_speed, unsigned long *tx_speed, char *
     get_network_usage(&rx2, &tx2, net_interface);
     unsigned long res[2]={0};
 
-    *rx_speed = rx2 - rx1;
-    *tx_speed = tx2 - tx1;
+    if(!first_read){
+      *rx_speed = rx2 - rx1;
+      *tx_speed = tx2 - tx1;
+    }else{
+      *rx_speed = 0;
+      *tx_speed = 0;
+      first_read = 0;
+    }
     rx1 = rx2;
     tx1 = tx2;
 

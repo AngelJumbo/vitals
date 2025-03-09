@@ -6,13 +6,20 @@
 #define NAME_STR_LEN(s) (sizeof(s) - 1) 
 #define APP_NAME " vitals "
 #define APP_VERSION " 0.0.1 "
+#define ALERT_MESSAGE "The terminal is too small."
+#define MIN_WIDTH 80
+#define MIN_HEIGHT 20
 
 extern char buf[1024];
 static struct tb_event event = {0};
 int cpu_perc();
 
 char *blocks[8]={"▁","▂","▃","▄","▅","▆","▇","█"};
-char *box[8] = {"╒", "╕", "╘", "╛", "═", "│","╡","╞"};
+//char *box[8] = {"╔", "╗", "╚", "╝", "─", "│", "┤", "├"};
+char *box[8] = {"┌", "┐", "└", "┘", "─", "│", "┤", "├"};
+//char *box[8] = {"━", "━", "━", "━", "━", "┃", "━", "━"};
+
+
 
 
 typedef void (*draw_bars)(List *, int, int, int, int);
@@ -52,13 +59,26 @@ int main(int argc, char *argv[]) {
   List *mem_list = list_create();
   List *net_up_list = list_create();
   List *net_down_list = list_create();
+
+
+  List *disk_lists[MAX_DISKS];
+  char disk_titles[MAX_DISKS][100];
+  int disk_count = 0;
+  DiskInfo *disk_info = NULL;
+
+  get_disk_info(&disk_count);
+  if (disk_count > MAX_DISKS) disk_count = MAX_DISKS;
+  
+  for (int i = 0; i < disk_count; i++) {
+    disk_lists[i] = list_create();
+  }
+
   char cpu_title[100] = "";
   char mem_title[100] = "";
   char net_up_title[100] = "";
   char net_down_title[100] = "";
   char speed_str[16];
-  //init disk lists here
-  int width,height,box_height,init_x=-1;
+  int width,height;
   int max_cpu=15;
 
   char active_interface[32];
@@ -66,66 +86,93 @@ int main(int argc, char *argv[]) {
   get_active_interface(active_interface, sizeof(active_interface));
   unsigned long download_speed, upload_speed;
 
+  // Set up disk boxes
+  Container disk_boxes[MAX_DISKS];
+  for (int i = 0; i < disk_count; i++) {
+    disk_boxes[i] = (Container){BOX, .box = {disk_lists[i], disk_titles[i], draw_bars_perc}};
+  }
+
+  // Set up CPU and memory boxes
   Container cpu_box = {BOX, .box = {cpu_list, cpu_title, draw_bars_perc}};
   Container mem_box = {BOX, .box = {mem_list, mem_title, draw_bars_perc}};
   Container net_up_box = {BOX, .box = {net_up_list, net_up_title, draw_scale_bars}};
   Container net_down_box = {BOX, .box = {net_down_list, net_down_title, draw_scale_bars}};
 
-  Container *vbox_net_children[] = {&net_up_box, &net_down_box};
-  Container vbox_net = {VBOX, .group = {vbox_net_children, 2}};
 
-  Container *vbox_children[] = {&cpu_box, &mem_box, &vbox_net};
-  Container vbox_main = {VBOX, .group = {vbox_children, 3}};
+  // Create network container
+  Container *hbox_net_children[] = {&net_up_box, &net_down_box};
+  Container hbox_net = {HBOX, .group = {hbox_net_children, 2}};
+
+  // Create disk container (horizontal layout)
+  Container *hbox_disk_children[MAX_DISKS];
+  for (int i = 0; i < disk_count; i++) {
+    hbox_disk_children[i] = &disk_boxes[i];
+  }
+  Container hbox_disks = {HBOX, .group = {hbox_disk_children, disk_count}};
+
+  // Main container
+  Container *vbox_children[] = {&cpu_box, &mem_box, &hbox_net, &hbox_disks};
+  Container vbox_main = {VBOX, .group = {vbox_children, 4}};
+
+
   
-  short first_read=1; 
   while (1) {
     
     int new_width = tb_width();
     int new_height = tb_height();
-    if(new_width!=width|| new_height!=height){
-      width=new_width;
-      height=new_height;
-      box_height = height/3; 
-      init_x=width-1;
+
+    if (new_width < MIN_WIDTH || new_height < MIN_HEIGHT) {
+      tb_clear();
+      tb_printf(new_width / 2 - (NAME_STR_LEN(ALERT_MESSAGE) / 2), new_height / 2, TB_RED, TB_DEFAULT, ALERT_MESSAGE);
+    }else{
+
+      if(new_width!=width|| new_height!=height){
+        width=new_width;
+        height=new_height;
+      }
+      get_network_speed(&download_speed, &upload_speed,active_interface);
+      tb_clear();
+      
+      // Add new CPU usage percentage
+      list_append_int(cpu_list, cpu_perc());
+      // Add new ram usage percentage
+      list_append_int(mem_list, mem_perc());
+      // Add new net upload speed
+      list_append_u_long(net_up_list, upload_speed);
+      // Add new net download speed
+      list_append_u_long(net_down_list, download_speed);
+
+      // Get disk info and update disk data
+      if (disk_info) free_disk_info(disk_info);
+      disk_info = get_disk_info(&disk_count);
+      if (disk_count > MAX_DISKS) disk_count = MAX_DISKS;
+      
+      for (int i = 0; i < disk_count; i++) {
+        list_append_int(disk_lists[i], (int)disk_info[i].busy_percent);
+        sprintf(disk_titles[i], "%s (%s): %i%%", 
+                disk_info[i].device_name, 
+                disk_info[i].disk_type, 
+                (int) disk_info[i].busy_percent);
+      }
+
+
+      sprintf(cpu_title,"Cpu: %i%%",node_get_int(cpu_list->last));
+      sprintf(mem_title,"Ram: %i%%",node_get_int(mem_list->last));
+      format_speed(speed_str, sizeof(speed_str), upload_speed);
+      sprintf(net_up_title,"Net. up: %s",speed_str);
+      format_speed(speed_str, sizeof(speed_str), download_speed);
+      sprintf(net_down_title,"Net. down: %s",speed_str);
+
+      container_render(0, 0, width, height, &vbox_main);
+    
+
+      tb_printf(width-NAME_STR_LEN(APP_VERSION), height-1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_VERSION);
+      tb_printf(0, height-1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_NAME);
     }
-    get_network_speed(&download_speed, &upload_speed,active_interface);
-    tb_clear();
-    
-    // Add new CPU usage percentage
-    list_append_int(cpu_list, cpu_perc());
-    // Add new ram usage percentage
-    list_append_int(mem_list, mem_perc());
-    // Add new net upload speed
-    list_append_u_long(net_up_list, first_read?0: upload_speed);
-    // Add new net download speed
-    list_append_u_long(net_down_list, first_read?0: download_speed);
-    if(first_read) first_read=0;
-
-    sprintf(cpu_title,"CPU: %i%%",node_get_int(cpu_list->last));
-    sprintf(mem_title,"RAM: %i%%",node_get_int(mem_list->last));
-    format_speed(speed_str, sizeof(speed_str), upload_speed);
-    sprintf(net_up_title,"NET UP: %s",speed_str);
-    format_speed(speed_str, sizeof(speed_str), download_speed);
-    sprintf(net_down_title,"NET DOWN: %s",speed_str);
-
-    container_render(0, 0, width, height, &vbox_main);
-  
-    /*
-    int height_box = height/3;
-    draw_box(0,0,width,height_box,cpu_list,cpu_title,draw_bars_perc);
-    draw_box(0,height_box,width,height_box*2,mem_list,mem_title,draw_bars_perc);
-    draw_box(0,height_box*2,width/2,height_box*3,net_up_list,net_up_title,draw_scale_bars);
-    draw_box(width/2,height_box*2,width,height_box*3,net_down_list,net_down_title,draw_scale_bars);
-*/
-
-    tb_printf(width-NAME_STR_LEN(APP_VERSION), height-1, TB_DEFAULT, TB_DEFAULT, APP_VERSION);
-    tb_printf(0, height-1, TB_DEFAULT, TB_DEFAULT, APP_NAME);
-    
     tb_peek_event(&event, 10);
     tb_present();
     if(event.ch=='q') break;
     usleep(1000000); // 1 second delay
-    if(init_x>0) init_x--;
   }
 
   tb_shutdown();
@@ -133,6 +180,12 @@ int main(int argc, char *argv[]) {
   list_free(mem_list);
   list_free(net_up_list);
   list_free(net_down_list);
+
+  for (int i = 0; i < disk_count; i++) {
+    list_free(disk_lists[i]);
+  }
+  
+  if (disk_info) free_disk_info(disk_info);
   return 0;
 
 }
@@ -160,7 +213,7 @@ void draw_box(int x,int y,int x2,int y2,List *list, char* title, draw_bars draw_
   tb_printf(x, y2-1, TB_DEFAULT, TB_DEFAULT, box[2]);
   tb_printf(x2-1, y2-1, TB_DEFAULT, TB_DEFAULT, box[3]);
   //tb_printf(x+2,y,TB_DEFAULT, TB_DEFAULT,"%s%s%s", box[6],title,box[7]);
-  tb_printf(x+2,y,TB_DEFAULT, TB_DEFAULT," %s ", title);
+  tb_printf(x+2,y,TB_DEFAULT | TB_BOLD, TB_DEFAULT," %s ", title);
 
   //tb_printf(x+1, hLine, TB_DEFAULT, TB_DEFAULT, "50%%");
   draw_b(list,(x2-1)-(x+1),(y2-1)-(y+1),x+1,y+1);
@@ -234,29 +287,31 @@ void draw_scale_bars(List *list, int width, int height, int min_x, int min_y) {
 }
 
 void container_render(int x, int y, int width, int height, Container *container) {
-    if (container->type == BOX) {
-        draw_box(x, y, x + width, y + height, container->box.list, container->box.title, container->box.draw_func);
-    } else if (container->type == HBOX) {
-        container_render_hbox(x, y, width, height, container);
-    } else if (container->type == VBOX) {
-        container_render_vbox(x, y, width, height, container);
-    }
+  if (container->type == BOX) {
+    draw_box(x, y, x + width, y + height, container->box.list, container->box.title, container->box.draw_func);
+  } else if (container->type == HBOX) {
+    container_render_hbox(x, y, width, height, container);
+  } else if (container->type == VBOX) {
+    container_render_vbox(x, y, width, height, container);
+  }
 }
 
 
 void container_render_vbox(int x, int y, int width, int height, Container *container) {
-    int box_height = height / container->group.count;
-    for (int i = 0; i < container->group.count; i++) {
-        Container *child = container->group.children[i];
-        container_render(x, y + i * box_height, width, box_height, child);
-    }
+  int box_height = height / container->group.count;
+  for (int i = 0; i < container->group.count; i++) {
+    int h = (i == container->group.count - 1) ? height - i * box_height : box_height;
+    Container *child = container->group.children[i];
+    container_render(x, y + i * box_height, width, h, child);
+  }
 }
 
 void container_render_hbox(int x, int y, int width, int height, Container *container) {
-    int box_width = width / container->group.count;
-    for (int i = 0; i < container->group.count; i++) {
-        Container *child = container->group.children[i];
-        container_render(x + i * box_width, y, box_width, height, child);
-    }
+  int box_width = width / container->group.count;
+  for (int i = 0; i < container->group.count; i++) {
+    int w = (i == container->group.count - 1) ? width - i * box_width : box_width; 
+    Container *child = container->group.children[i];
+    container_render(x + i * box_width, y, w, height, child);
+  }
 }
 

@@ -14,11 +14,6 @@ typedef struct list {
   int count;
 } List;
 
-typedef struct {
-    char name[32];
-    List *usage_queue;
-} DiskInfo;
-
 Node *node_create(void *value);
 
 List *list_create();
