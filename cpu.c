@@ -1,34 +1,37 @@
 #include "modules.h"
 
-int cpu_perc(){
-  static long prev_idle = 0, prev_total = 0;
-    long idle, total;
-    long user, nice, system, idle_time, iowait, irq, softirq;
+int cpu_perc() {
+  static long double a[7] = {0};
+  long double b[7], sum;
+  //if(skip_read) return 0;
 
-    FILE *fp = fopen("/proc/stat", "r");
-    if (!fp) {
-        perror("Failed to open /proc/stat");
-        return -1;
-    }
+  memcpy(b, a, sizeof(b));
 
-    // Read the first line from /proc/stat
-    if (fscanf(fp, "cpu  %ld %ld %ld %ld %ld %ld %ld",
-               &user, &nice, &system, &idle_time, &iowait, &irq, &softirq) != 7) {
-        perror("Failed to parse /proc/stat");
-        fclose(fp);
-        return -1;
-    }
-    fclose(fp);
+  FILE *fp = fopen("/proc/stat", "r");
+  if (!fp) {
+      perror("Failed to open /proc/stat");
+      return -1;
+  }
 
-    idle = idle_time + iowait;
-    total = user + nice + system + idle + irq + softirq;
+  if (fscanf(fp, "cpu  %Lf %Lf %Lf %Lf %Lf %Lf %Lf",
+             &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6]) != 7) {
+      fclose(fp);
+      return -1;
+  }
+  fclose(fp);
 
-    long delta_idle = idle - prev_idle;
-    long delta_total = total - prev_total;
+  if (b[0] == 0) {
+      return -1;
+  }
 
-    prev_idle = idle;
-    prev_total = total;
+  sum = (b[0] + b[1] + b[2] + b[3] + b[4] + b[5] + b[6]) -
+        (a[0] + a[1] + a[2] + a[3] + a[4] + a[5] + a[6]);
 
-    // Return CPU usage as a percentage
-    return (delta_total - delta_idle) * 100 / delta_total;
+  if (sum == 0) {
+      return -1;
+  }
+
+  return (int)(100 * ((b[0] + b[1] + b[2] + b[5] + b[6]) -
+                      (a[0] + a[1] + a[2] + a[5] + a[6])) / sum);
 }
+

@@ -3,7 +3,7 @@
 #include "modules.h"
 #include "utils.h"
 #define MAX_DISKS 8
-#define NAME_STR_LEN(s) (sizeof(s) - 1) 
+#define STR_LEN(s) (sizeof(s) - 1) 
 #define APP_NAME " vitals "
 #define APP_VERSION " 0.0.1 "
 #define ALERT_MESSAGE "The terminal is too small."
@@ -12,7 +12,6 @@
 
 extern char buf[1024];
 static struct tb_event event = {0};
-int cpu_perc();
 
 char *blocks[8]={"▁","▂","▃","▄","▅","▆","▇","█"};
 //char *box[8] = {"╔", "╗", "╚", "╝", "─", "│", "┤", "├"};
@@ -122,12 +121,13 @@ int main(int argc, char *argv[]) {
 
     if (new_width < MIN_WIDTH || new_height < MIN_HEIGHT) {
       tb_clear();
-      tb_printf(new_width / 2 - (NAME_STR_LEN(ALERT_MESSAGE) / 2), new_height / 2, TB_RED, TB_DEFAULT, ALERT_MESSAGE);
+      tb_printf(new_width / 2 - (STR_LEN(ALERT_MESSAGE) / 2), new_height / 2, TB_RED, TB_DEFAULT, ALERT_MESSAGE);
     }else{
 
       if(new_width!=width|| new_height!=height){
         width=new_width;
         height=new_height;
+        //cpu_perc(1); //Discarding an erroneous measurement after resizing
       }
       get_network_speed(&download_speed, &upload_speed,active_interface);
       tb_clear();
@@ -158,19 +158,21 @@ int main(int argc, char *argv[]) {
       sprintf(cpu_title,"Cpu: %i%%",node_get_int(cpu_list->last));
       sprintf(mem_title,"Ram: %i%%",node_get_int(mem_list->last));
       format_speed(speed_str, sizeof(speed_str), upload_speed);
-      sprintf(net_up_title,"Net. up: %s",speed_str);
+      sprintf(net_up_title,"N. up: %s",speed_str);
       format_speed(speed_str, sizeof(speed_str), download_speed);
-      sprintf(net_down_title,"Net. down: %s",speed_str);
+      sprintf(net_down_title,"N. down: %s",speed_str);
 
       container_render(0, 0, width, height, &vbox_main);
     
 
-      tb_printf(width-NAME_STR_LEN(APP_VERSION), height-1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_VERSION);
+      tb_printf(width-STR_LEN(APP_VERSION), height-1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_VERSION);
       tb_printf(0, height-1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_NAME);
     }
+    tb_peek_event(&event, 10);
     tb_present();
-    tb_peek_event(&event, 1000);
-    if(event.ch=='q' || event.key == TB_KEY_CTRL_C || event.key == TB_KEY_ESC) break;
+    if (event.ch == 'q' || event.key == TB_KEY_CTRL_C || event.key == TB_KEY_ESC) break;
+    usleep(1000000);
+
   }
 
   tb_shutdown();
@@ -264,6 +266,13 @@ void draw_scale_bars(List *list, int width, int height, int min_x, int min_y) {
     max_value=node_get_u_long(node) > max_value? node_get_u_long(node) : max_value;
     node = node->next;
   }
+
+  //TODO: find a way to do this outside this function
+  char max_str[50] = "";
+  format_speed(max_str, sizeof(max_str), max_value);
+  char max_str_present[50] = "max: ";
+  strcat(max_str_present,max_str);
+  tb_printf(min_x + width - (strlen(max_str_present)) - 2, min_y -1, TB_DEFAULT | TB_BOLD, TB_DEFAULT," %s ",max_str_present);
   
 
   int x = width - list->count;
