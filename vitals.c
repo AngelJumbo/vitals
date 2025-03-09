@@ -79,7 +79,6 @@ int main(int argc, char *argv[]) {
   char net_down_title[100] = "";
   char speed_str[16];
   int width,height;
-  int max_cpu=15;
 
   char active_interface[32];
 
@@ -171,7 +170,7 @@ int main(int argc, char *argv[]) {
     }
     tb_peek_event(&event, 10);
     tb_present();
-    if(event.ch=='q') break;
+    if(event.ch=='q' || event.key == TB_KEY_CTRL_C || event.key == TB_KEY_ESC) break;
     usleep(1000000); // 1 second delay
   }
 
