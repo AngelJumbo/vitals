@@ -168,10 +168,9 @@ int main(int argc, char *argv[]) {
       tb_printf(width-NAME_STR_LEN(APP_VERSION), height-1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_VERSION);
       tb_printf(0, height-1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_NAME);
     }
-    tb_peek_event(&event, 10);
     tb_present();
+    tb_peek_event(&event, 1000);
     if(event.ch=='q' || event.key == TB_KEY_CTRL_C || event.key == TB_KEY_ESC) break;
-    usleep(1000000); // 1 second delay
   }
 
   tb_shutdown();
@@ -193,7 +192,7 @@ void draw_box(int x,int y,int x2,int y2,List *list, char* title, draw_bars draw_
   short skipLine = 0;
   int hLine = (y2 - y)/2 + y -1;
 
-  char lineChar[1] = {(y2-y)%2==0?'_':'-'};
+  char lineChar[2] = {(y2-y)%2==0?'_':'-'};
   hLine+=(lineChar[0]=='-'?1:0);
   for(int i=x+1;i<x2-1;i++){
     tb_printf(i, y, TB_DEFAULT, TB_DEFAULT, box[4]); 
@@ -297,6 +296,7 @@ void container_render(int x, int y, int width, int height, Container *container)
 
 
 void container_render_vbox(int x, int y, int width, int height, Container *container) {
+  if (!container->group.count) return;
   int box_height = height / container->group.count;
   for (int i = 0; i < container->group.count; i++) {
     int h = (i == container->group.count - 1) ? height - i * box_height : box_height;
@@ -306,6 +306,7 @@ void container_render_vbox(int x, int y, int width, int height, Container *conta
 }
 
 void container_render_hbox(int x, int y, int width, int height, Container *container) {
+  if (!container->group.count) return;
   int box_width = width / container->group.count;
   for (int i = 0; i < container->group.count; i++) {
     int w = (i == container->group.count - 1) ? width - i * box_width : box_width; 
