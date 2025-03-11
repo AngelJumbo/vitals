@@ -1,10 +1,10 @@
 PREFIX = /usr/local
 
 vitals: vitals.c cpu.c ram.c utils.c network.c disk.c
-	$(CC) vitals.c cpu.c ram.c utils.c network.c disk.c -o vitals
+	$(CC) -lpthread vitals.c cpu.c ram.c utils.c network.c disk.c -o vitals
 
 debug: vitals.c cpu.c ram.c utils.c network.c disk.c
-	$(CC) -Wall vitals.c cpu.c ram.c utils.c network.c disk.c -g -o vitals
+	$(CC) -Wall -lpthread vitals.c cpu.c ram.c utils.c network.c disk.c -g -o vitals
 
 .PHONY: clean
 clean:
