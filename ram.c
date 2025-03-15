@@ -1,6 +1,6 @@
 #include "modules.h"
 
-int mem_perc() {
+float mem_perc() {
   FILE *meminfo = fopen("/proc/meminfo", "r");
     if (meminfo == NULL) {
         perror("Error opening /proc/meminfo");
@@ -26,6 +26,6 @@ int mem_perc() {
         return -1;
     }
 
-    return (int)(((float)(total_mem - available_mem) / total_mem) * 100);
+    return (((float)(total_mem - available_mem) / total_mem) * 100);
     
 }

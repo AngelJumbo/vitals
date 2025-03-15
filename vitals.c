@@ -8,7 +8,7 @@
 #define MAX_DISKS 8
 #define STR_LEN(s) (sizeof(s) - 1) 
 #define APP_NAME " vitals "
-#define APP_VERSION " 0.0.1 "
+#define APP_VERSION " 0.0.2 "
 #define ALERT_MESSAGE "The terminal is too small."
 #define MIN_WIDTH 80
 #define MIN_HEIGHT 20
@@ -86,6 +86,7 @@ void *render_thread(void *arg);
 void setup_containers();
 void cleanup_resources();
 void handle_signal(int signal);
+void list_trim(List *list, int width);
 
 int main(int argc, char *argv[]) {
   // Initialize termbox
@@ -143,8 +144,10 @@ void *stats_collection_thread(void *arg) {
     pthread_mutex_lock(&shared_data.data_mutex);
     
     // Collect CPU and memory usage
-    list_append_int(shared_data.cpu_list, cpu_perc());
-    list_append_int(shared_data.mem_list, mem_perc());
+    float cpu_usage = cpu_perc();
+    float ram_usage = mem_perc();
+    list_append_int(shared_data.cpu_list, (int) cpu_usage);
+    list_append_int(shared_data.mem_list, (int) ram_usage);
     
     // Collect network stats
     unsigned long download_speed, upload_speed;
@@ -153,8 +156,8 @@ void *stats_collection_thread(void *arg) {
     list_append_u_long(shared_data.net_down_list, download_speed);
     
     // Update titles
-    sprintf(shared_data.cpu_title, "Cpu: %i%%", node_get_int(shared_data.cpu_list->last));
-    sprintf(shared_data.mem_title, "Ram: %i%%", node_get_int(shared_data.mem_list->last));
+    sprintf(shared_data.cpu_title, "Cpu: %.1f%%", cpu_usage);
+    sprintf(shared_data.mem_title, "Ram: %.1f%%", ram_usage);
     
     char speed_str[16];
     format_speed(speed_str, sizeof(speed_str), upload_speed);
@@ -169,16 +172,26 @@ void *stats_collection_thread(void *arg) {
     
     for (int i = 0; i < shared_data.disk_count; i++) {
       list_append_int(shared_data.disk_lists[i], (int)shared_data.disk_info[i].busy_percent);
-      sprintf(shared_data.disk_titles[i], "%s (%s): %i%%", 
+      sprintf(shared_data.disk_titles[i], "%s (%s): %.2f%%", 
               shared_data.disk_info[i].device_name, 
               shared_data.disk_info[i].disk_type, 
-              (int)shared_data.disk_info[i].busy_percent);
+              shared_data.disk_info[i].busy_percent);
+    }
+    int max_width = tb_width();
+
+    // Trim the lists
+    list_trim(shared_data.cpu_list, max_width); 
+    list_trim(shared_data.mem_list, max_width); 
+    list_trim(shared_data.net_up_list, max_width); 
+    list_trim(shared_data.net_down_list, max_width); 
+    for (int i = 0; i < shared_data.disk_count; i++) {
+      list_trim(shared_data.disk_lists[i], max_width); 
     }
     
     // Signal that new data is available
     pthread_cond_signal(&shared_data.data_updated);
     pthread_mutex_unlock(&shared_data.data_mutex);
-    
+
     // Sleep for 1 second before collecting stats again
     usleep(1000000);
   }
@@ -321,14 +334,14 @@ void draw_box(int x, int y, int x2, int y2, List *list, char* title, draw_bars d
 }
 
 void draw_bars_perc(List *list, int width, int height, int min_x, int min_y) {
-  while (list->count > width) {
-    Node *old_node = list->first;
-    list->first = old_node->next;
-    free(old_node);
-    list->count--;
-  }
-  int x = width - list->count;
+
+  int count = list->count;
   Node *node = list->first;
+  while(count > width){
+    node = node->next;
+    count--;
+  }
+  int x = width - count;
   while (node != NULL && x < width) {
     int bar_h = (node_get_int(node) * height) / 100; // Full blocks
     int bar_h_e = ((node_get_int(node) * height) % 100) * 8 / 100; // Extra fractional block
@@ -351,15 +364,15 @@ void draw_bars_perc(List *list, int width, int height, int min_x, int min_y) {
 }
 
 void draw_scale_bars(List *list, int width, int height, int min_x, int min_y) {
-  while (list->count > width) {
-    Node *old_node = list->first;
-    list->first = old_node->next;
-    free(old_node);
-    list->count--;
+  int count = list->count;
+  Node *node = list->first;
+  while(count > width){
+    node = node->next;
+    count--;
   }
+  Node *node_ref = node; 
   unsigned long max_value = 1;
   short max_value_change = 0;
-  Node *node = list->first;
   while (node != NULL) {
     unsigned long curr=node_get_u_long(node);
     if(curr>0) max_value_change=1;
@@ -373,8 +386,8 @@ void draw_scale_bars(List *list, int width, int height, int min_x, int min_y) {
   strcat(max_str_present, max_str);
   tb_printf(min_x + width - (strlen(max_str_present)) - 2, min_y -1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, " %s ", max_str_present);
   
-  int x = width - list->count;
-  node = list->first;
+  int x = width - count;
+  node = node_ref;
   while (node != NULL && x < width) {
     int bar_h = (int)((node_get_u_long(node) * height) / max_value);
     int bar_h_e = (int)(((node_get_u_long(node) * height) % max_value) * 8 / max_value);
@@ -429,3 +442,12 @@ void container_render_hbox(int x, int y, int width, int height, Container *conta
   }
 }
 
+void list_trim(List *list, int width){
+  while (list->count > width) {
+    Node *old_node = list->first;
+    list->first = old_node->next;
+    free(old_node->value);
+    free(old_node);
+    list->count--;
+  }
+}
