@@ -9,6 +9,9 @@
 
 float mem_perc();
 float cpu_perc();
+short gpu_available();
+float gpu_perc();
+float vram_perc();
 void get_active_interface(char *interface, size_t size);
 void get_network_speed( unsigned long *rx_speed, unsigned long *tx_speed, char *net_interface);
 void format_speed(char *buffer, size_t size, unsigned long bytes_per_sec);
