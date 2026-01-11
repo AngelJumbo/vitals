@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <dirent.h>
 
+#include "process.h"
+
 float mem_perc();
 float cpu_perc();
 void get_active_interface(char *interface, size_t size);

@@ -13,6 +13,12 @@
 #define MIN_WIDTH 80
 #define MIN_HEIGHT 20
 
+// Tabs
+typedef enum { TAB_VITALS = 0, TAB_PROCESSES = 1 } ActiveTab;
+
+// Input mode for process tab
+typedef enum { PROC_MODE_NORMAL = 0, PROC_MODE_FILTER = 1 } ProcInputMode;
+
 extern char buf[1024];
 static struct tb_event event = {0};
 
@@ -38,7 +44,6 @@ typedef struct Container {
   };
 } Container;
 
-// Shared data structures and synchronization
 typedef struct {
   List *cpu_list;
   List *mem_list;
@@ -56,6 +61,17 @@ typedef struct {
   volatile short running;
   pthread_mutex_t data_mutex;
   pthread_cond_t data_updated;
+
+  // Process view
+  ProcSampleCtx proc_ctx;
+  ProcessInfo *proc_entries;
+  int proc_count;
+  int proc_selected;
+  int proc_scroll;
+  ActiveTab active_tab;
+
+  ProcInputMode proc_mode;
+  char proc_filter[64];
 
   //Containers
   Container cpu_box;
@@ -88,6 +104,11 @@ void cleanup_resources();
 void handle_signal(int signal);
 void list_trim(List *list, int width);
 
+static void draw_tabs(int width, ActiveTab active);
+static void render_process_view(int width, int height);
+static void process_handle_key(short key, uint32_t ch);
+static void draw_hline(int x, int y, int w);
+
 int main(int argc, char *argv[]) {
   // Initialize termbox
   tb_init();
@@ -100,6 +121,15 @@ int main(int argc, char *argv[]) {
   pthread_mutex_init(&shared_data.data_mutex, NULL);
   pthread_cond_init(&shared_data.data_updated, NULL);
   shared_data.running = 1;
+
+  shared_data.active_tab = TAB_VITALS;
+  shared_data.proc_entries = NULL;
+  shared_data.proc_count = 0;
+  shared_data.proc_selected = 0;
+  shared_data.proc_scroll = 0;
+  shared_data.proc_mode = PROC_MODE_NORMAL;
+  shared_data.proc_filter[0] = '\0';
+  proc_init_ctx(&shared_data.proc_ctx);
   
   // Create lists
   shared_data.cpu_list = list_create();
@@ -142,7 +172,7 @@ int main(int argc, char *argv[]) {
 void *stats_collection_thread(void *arg) {
   while (shared_data.running) {
     pthread_mutex_lock(&shared_data.data_mutex);
-    
+
     // Collect CPU and memory usage
     float cpu_usage = cpu_perc();
     float ram_usage = mem_perc();
@@ -188,6 +218,23 @@ void *stats_collection_thread(void *arg) {
       list_trim(shared_data.disk_lists[i], max_width); 
     }
     
+    // Process list (only sample when on process tab to reduce work)
+    if (shared_data.active_tab == TAB_PROCESSES) {
+      if (shared_data.proc_entries) {
+        proc_free(shared_data.proc_entries);
+        shared_data.proc_entries = NULL;
+        shared_data.proc_count = 0;
+      }
+      ProcessInfo *plist = NULL;
+      int pcount = 0;
+      if (proc_list(&plist, &pcount, &shared_data.proc_ctx, shared_data.proc_filter) == 0) {
+        shared_data.proc_entries = plist;
+        shared_data.proc_count = pcount;
+        if (shared_data.proc_selected >= shared_data.proc_count) shared_data.proc_selected = shared_data.proc_count - 1;
+        if (shared_data.proc_selected < 0) shared_data.proc_selected = 0;
+      }
+    }
+
     // Signal that new data is available
     pthread_cond_signal(&shared_data.data_updated);
     pthread_mutex_unlock(&shared_data.data_mutex);
@@ -195,7 +242,7 @@ void *stats_collection_thread(void *arg) {
     // Sleep for 1 second before collecting stats again
     usleep(1000000);
   }
-  
+
   return NULL;
 }
 
@@ -204,46 +251,203 @@ void *render_thread(void *arg) {
   int width = 0, height = 0;
   
   while (shared_data.running) {
-      
     int new_width = tb_width();
     int new_height = tb_height();
-    
+
     pthread_mutex_lock(&shared_data.data_mutex);
-    
+
     // Check if terminal size changed
     if (new_width != width || new_height != height) {
       width = new_width;
       height = new_height;
     }
-    
+
     tb_clear();
-    
+
     if (width < MIN_WIDTH || height < MIN_HEIGHT) {
       tb_printf(width / 2 - (STR_LEN(ALERT_MESSAGE) / 2), height / 2, TB_RED, TB_DEFAULT, ALERT_MESSAGE);
     } else {
-      // Render the UI
-      container_render(0, 0, width, height, &shared_data.vbox_main);
-      
-      // Draw app name and version
+      // Tabs header
+      draw_tabs(width, shared_data.active_tab);
+
+      // Render active tab content below header
+      if (shared_data.active_tab == TAB_VITALS) {
+        container_render(0, 1, width, height - 1, &shared_data.vbox_main);
+      } else {
+        render_process_view(width, height);
+      }
+
+      // Footer app name and version
       tb_printf(width - STR_LEN(APP_VERSION), height - 1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_VERSION);
       tb_printf(0, height - 1, TB_DEFAULT | TB_BOLD, TB_DEFAULT, APP_NAME);
     }
-    
+
     pthread_mutex_unlock(&shared_data.data_mutex);
-    
-    // Present the rendered UI
+
     tb_present();
-    
-    // Check for events (non-blocking)
-    tb_peek_event(&event, 1000);
+
+    // Non-blocking event read so UI keeps updating.
+    // Small timeout keeps CPU low while still responsive.
+    event.type = 0;
+    tb_peek_event(&event, 50);
+
+    if (event.type != TB_EVENT_KEY) continue;
+
     if (event.ch == 'q' || event.key == TB_KEY_CTRL_C || event.key == TB_KEY_ESC) {
       shared_data.running = 0;
       return NULL;
     }
-      
+
+    // Tab switching: always allowed
+    if (event.key == TB_KEY_TAB) {
+      shared_data.active_tab = (shared_data.active_tab == TAB_VITALS) ? TAB_PROCESSES : TAB_VITALS;
+      if (shared_data.active_tab == TAB_VITALS) shared_data.proc_mode = PROC_MODE_NORMAL;
+      continue;
+    }
+    if (event.ch == '1') {
+      shared_data.active_tab = TAB_VITALS;
+      shared_data.proc_mode = PROC_MODE_NORMAL;
+      continue;
+    }
+    if (event.ch == '2') {
+      shared_data.active_tab = TAB_PROCESSES;
+      continue;
+    }
+
+    // Per-tab keys
+    if (shared_data.active_tab == TAB_PROCESSES) {
+      process_handle_key(event.key, event.ch);
+    }
   }
-  
+
   return NULL;
+}
+
+static void draw_hline(int x, int y, int w) {
+  for (int i = 0; i < w; i++) tb_printf(x + i, y, TB_DEFAULT, TB_DEFAULT, "-");
+}
+
+static void draw_tabs(int width, ActiveTab active) {
+  // Centered tabs: [ Vitals ] [ Processes ]
+  const char *t1 = "Vitals";
+  const char *t2 = "Processes";
+
+  char left[64];
+  char right[64];
+  snprintf(left, sizeof(left), "[ %s ]", t1);
+  snprintf(right, sizeof(right), "[ %s ]", t2);
+
+  int tabs_w = (int)strlen(left) + 1 + (int)strlen(right);
+  int start_x = (width > tabs_w) ? (width - tabs_w) / 2 : 0;
+
+  uintattr_t a_fg = TB_DEFAULT | TB_BOLD;
+  uintattr_t i_fg = TB_DEFAULT;
+
+  tb_printf(start_x, 0, active == TAB_VITALS ? a_fg : i_fg, TB_DEFAULT, "%s", left);
+  tb_printf(start_x + (int)strlen(left) + 1, 0, active == TAB_PROCESSES ? a_fg : i_fg, TB_DEFAULT, "%s", right);
+}
+
+static void render_process_view(int width, int height) {
+  int header_y = 1;
+  int list_y = 2;
+  int list_h = height - 3;
+
+  if (shared_data.proc_mode == PROC_MODE_FILTER) {
+    tb_printf(0, header_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
+              "Filter: /%s  (Enter=apply, Esc=cancel, Backspace=delete)", shared_data.proc_filter);
+  } else {
+    tb_printf(0, header_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
+              "PID     S  CPU%%   MEM%%   RSS(KB)  COMMAND   (j/k or arrows, /=filter, x=SIGTERM, X=SIGKILL)");
+  }
+
+  if (!shared_data.proc_entries || shared_data.proc_count <= 0) {
+    tb_printf(0, list_y, TB_YELLOW | TB_BOLD, TB_DEFAULT, "No process data yet (wait 1s) or insufficient permissions.");
+    return;
+  }
+
+  if (shared_data.proc_selected < 0) shared_data.proc_selected = 0;
+  if (shared_data.proc_selected >= shared_data.proc_count) shared_data.proc_selected = shared_data.proc_count - 1;
+
+  if (shared_data.proc_selected < shared_data.proc_scroll) shared_data.proc_scroll = shared_data.proc_selected;
+  if (shared_data.proc_selected >= shared_data.proc_scroll + list_h) shared_data.proc_scroll = shared_data.proc_selected - list_h + 1;
+  if (shared_data.proc_scroll < 0) shared_data.proc_scroll = 0;
+
+  for (int row = 0; row < list_h; row++) {
+    int idx = shared_data.proc_scroll + row;
+    if (idx >= shared_data.proc_count) break;
+
+    ProcessInfo *p = &shared_data.proc_entries[idx];
+
+    // More readable highlight: keep background default, just make text bold + cyan
+    uintattr_t fg = (idx == shared_data.proc_selected) ? (TB_CYAN | TB_BOLD) : TB_DEFAULT;
+    uintattr_t bg = TB_DEFAULT;
+
+    char line[256];
+    snprintf(line, sizeof(line), "%-7d %-2c %6.1f %7.1f %8lu  %.60s",
+             p->pid, p->state ? p->state : '?', p->cpu_percent, p->mem_percent, p->rss_kb, p->comm);
+
+    for (int x = 0; x < width; x++) tb_printf(x, list_y + row, fg, bg, " ");
+    tb_printf(0, list_y + row, fg, bg, "%.*s", width, line);
+  }
+}
+
+static void process_handle_key(short key, uint32_t ch) {
+  // Filter mode eats most keys
+  if (shared_data.proc_mode == PROC_MODE_FILTER) {
+    if (key == TB_KEY_ESC) {
+      shared_data.proc_mode = PROC_MODE_NORMAL;
+      return;
+    }
+    if (key == TB_KEY_ENTER) {
+      shared_data.proc_mode = PROC_MODE_NORMAL;
+      shared_data.proc_selected = 0;
+      shared_data.proc_scroll = 0;
+      return;
+    }
+    if (key == TB_KEY_BACKSPACE || key == TB_KEY_BACKSPACE2) {
+      size_t n = strlen(shared_data.proc_filter);
+      if (n > 0) shared_data.proc_filter[n - 1] = '\0';
+      return;
+    }
+    if (ch >= 32 && ch <= 126) {
+      size_t n = strlen(shared_data.proc_filter);
+      if (n + 1 < sizeof(shared_data.proc_filter)) {
+        shared_data.proc_filter[n] = (char)ch;
+        shared_data.proc_filter[n + 1] = '\0';
+      }
+      return;
+    }
+    return;
+  }
+
+  // Normal mode
+  if (ch == '/') {
+    shared_data.proc_mode = PROC_MODE_FILTER;
+    shared_data.proc_filter[0] = '\0';
+    return;
+  }
+
+  if (ch == 'j' || key == TB_KEY_ARROW_DOWN) {
+    if (shared_data.proc_selected < shared_data.proc_count - 1) shared_data.proc_selected++;
+  } else if (ch == 'k' || key == TB_KEY_ARROW_UP) {
+    if (shared_data.proc_selected > 0) shared_data.proc_selected--;
+  } else if (key == TB_KEY_PGDN) {
+    shared_data.proc_selected += 10;
+    if (shared_data.proc_selected >= shared_data.proc_count) shared_data.proc_selected = shared_data.proc_count - 1;
+  } else if (key == TB_KEY_PGUP) {
+    shared_data.proc_selected -= 10;
+    if (shared_data.proc_selected < 0) shared_data.proc_selected = 0;
+  } else if (ch == 'x') {
+    if (shared_data.proc_entries && shared_data.proc_count > 0) {
+      int pid = shared_data.proc_entries[shared_data.proc_selected].pid;
+      proc_kill(pid, SIGTERM);
+    }
+  } else if (ch == 'X') {
+    if (shared_data.proc_entries && shared_data.proc_count > 0) {
+      int pid = shared_data.proc_entries[shared_data.proc_selected].pid;
+      proc_kill(pid, SIGKILL);
+    }
+  }
 }
 
 void setup_containers() {
@@ -294,7 +498,9 @@ void cleanup_resources() {
   }
   
   if (shared_data.disk_info) free_disk_info(shared_data.disk_info);
-  
+  if (shared_data.proc_entries) proc_free(shared_data.proc_entries);
+  proc_free_ctx(&shared_data.proc_ctx);
+
   // Destroy synchronization primitives
   pthread_mutex_destroy(&shared_data.data_mutex);
   pthread_cond_destroy(&shared_data.data_updated);
