@@ -356,8 +356,10 @@ static void render_process_view(int width, int height) {
     tb_printf(0, header_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
               "Filter: /%s  (Enter=apply, Esc=cancel, Backspace=delete)", shared_data.proc_filter);
   } else {
+    // Keep header aligned with row format: "%-7d %-2c %6.1f %7.1f %8lu  %.60s"
     tb_printf(0, header_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
-              "PID     S  CPU%%   MEM%%   RSS(KB)  COMMAND   (j/k or arrows, /=filter, x=SIGTERM, X=SIGKILL)");
+              "%-7s %-2s %6s %7s %8s  %-s   (j/k or arrows, /=filter, x=SIGTERM, X=SIGKILL)",
+              "PID", "S", "CPU%", "MEM%", "RSS(KB)", "COMMAND");
   }
 
   if (!shared_data.proc_entries || shared_data.proc_count <= 0) {
