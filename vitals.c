@@ -124,7 +124,8 @@ int main(int argc, char *argv[]) {
   tb_init();
 
   // Ensure special keys like arrows are decoded into TB_KEY_ARROW_*.
-  tb_set_input_mode(TB_INPUT_ESC);
+  // Enable mouse events so tabs can be clicked.
+  tb_set_input_mode(TB_INPUT_ESC | TB_INPUT_MOUSE);
   
   // Set up signal handling
   signal(SIGINT, handle_signal);
@@ -267,7 +268,7 @@ void *stats_collection_thread(void *arg) {
 // Rendering and event handling thread
 void *render_thread(void *arg) {
   int width = 0, height = 0;
-  
+
   while (shared_data.running) {
     int new_width = tb_width();
     int new_height = tb_height();
@@ -308,6 +309,34 @@ void *render_thread(void *arg) {
     // Small timeout keeps CPU low while still responsive.
     event.type = 0;
     tb_peek_event(&event, 50);
+
+    if (event.type == TB_EVENT_MOUSE) {
+      // Click on the top row toggles/selects tabs
+      if (event.y == 0 && event.key == TB_KEY_MOUSE_LEFT) {
+        // Recompute tab hit-boxes exactly like draw_tabs()
+        const char *t1 = "Overview";
+        const char *t2 = "Processes";
+        char left[64];
+        char right[64];
+        snprintf(left, sizeof(left), "[ %s ]", t1);
+        snprintf(right, sizeof(right), "[ %s ]", t2);
+        int tabs_w = (int)strlen(left) + 1 + (int)strlen(right);
+        int start_x = (width > tabs_w) ? (width - tabs_w) / 2 : 0;
+
+        int left_x1 = start_x;
+        int left_x2 = start_x + (int)strlen(left) - 1;
+        int right_x1 = start_x + (int)strlen(left) + 1;
+        int right_x2 = right_x1 + (int)strlen(right) - 1;
+
+        if (event.x >= left_x1 && event.x <= left_x2) {
+          shared_data.active_tab = TAB_VITALS;
+          shared_data.proc_mode = PROC_MODE_NORMAL;
+        } else if (event.x >= right_x1 && event.x <= right_x2) {
+          shared_data.active_tab = TAB_PROCESSES;
+        }
+      }
+      continue;
+    }
 
     if (event.type != TB_EVENT_KEY) continue;
 
