@@ -166,12 +166,58 @@ static int read_proc_stat(int pid, char *comm_out, size_t comm_sz, char *state_o
     return 0;
 }
 
+typedef enum {
+    PROC_SORT_CPU = 0,
+    PROC_SORT_MEM = 1,
+    PROC_SORT_RSS = 2,
+    PROC_SORT_PID = 3
+} ProcSort;
+
+static ProcSort g_sort_mode = PROC_SORT_CPU;
+
+void proc_set_sort_mode(int mode) {
+    if (mode < 0 || mode > 3) mode = 0;
+    g_sort_mode = (ProcSort)mode;
+}
+
 static int cmp_cpu_desc(const void *a, const void *b) {
     const ProcessInfo *pa = (const ProcessInfo *)a;
     const ProcessInfo *pb = (const ProcessInfo *)b;
     if (pa->cpu_percent < pb->cpu_percent) return 1;
     if (pa->cpu_percent > pb->cpu_percent) return -1;
     return (pa->pid - pb->pid);
+}
+
+static int cmp_mem_desc(const void *a, const void *b) {
+    const ProcessInfo *pa = (const ProcessInfo *)a;
+    const ProcessInfo *pb = (const ProcessInfo *)b;
+    if (pa->mem_percent < pb->mem_percent) return 1;
+    if (pa->mem_percent > pb->mem_percent) return -1;
+    return (pa->pid - pb->pid);
+}
+
+static int cmp_rss_desc(const void *a, const void *b) {
+    const ProcessInfo *pa = (const ProcessInfo *)a;
+    const ProcessInfo *pb = (const ProcessInfo *)b;
+    if (pa->rss_kb < pb->rss_kb) return 1;
+    if (pa->rss_kb > pb->rss_kb) return -1;
+    return (pa->pid - pb->pid);
+}
+
+static int cmp_pid_asc(const void *a, const void *b) {
+    const ProcessInfo *pa = (const ProcessInfo *)a;
+    const ProcessInfo *pb = (const ProcessInfo *)b;
+    return pa->pid - pb->pid;
+}
+
+static int process_cmp(const void *a, const void *b) {
+    switch (g_sort_mode) {
+        case PROC_SORT_MEM: return cmp_mem_desc(a, b);
+        case PROC_SORT_RSS: return cmp_rss_desc(a, b);
+        case PROC_SORT_PID: return cmp_pid_asc(a, b);
+        case PROC_SORT_CPU:
+        default: return cmp_cpu_desc(a, b);
+    }
 }
 
 int proc_list(ProcessInfo **out, int *out_count, ProcSampleCtx *ctx, const char *name_filter) {
@@ -244,7 +290,8 @@ int proc_list(ProcessInfo **out, int *out_count, ProcSampleCtx *ctx, const char 
 
     closedir(dir);
 
-    qsort(list, (size_t)count, sizeof(ProcessInfo), cmp_cpu_desc);
+    // use current mode when sorting
+    qsort(list, (size_t)count, sizeof(ProcessInfo), process_cmp);
 
     *out = list;
     *out_count = count;

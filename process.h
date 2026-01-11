@@ -33,5 +33,6 @@ int proc_list(ProcessInfo **out, int *out_count, ProcSampleCtx *ctx, const char 
 void proc_free(ProcessInfo *list);
 int proc_kill(int pid, int sig);
 void proc_free_ctx(ProcSampleCtx *ctx);
+void proc_set_sort_mode(int mode);
 
 #endif

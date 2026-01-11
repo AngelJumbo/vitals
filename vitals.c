@@ -16,6 +16,14 @@
 // Tabs
 typedef enum { TAB_VITALS = 0, TAB_PROCESSES = 1 } ActiveTab;
 
+// Process sorting
+typedef enum {
+  PROC_SORT_CPU = 0,
+  PROC_SORT_MEM = 1,
+  PROC_SORT_RSS = 2,
+  PROC_SORT_PID = 3
+} ProcSort;
+
 // Input mode for process tab
 typedef enum { PROC_MODE_NORMAL = 0, PROC_MODE_FILTER = 1 } ProcInputMode;
 
@@ -72,6 +80,8 @@ typedef struct {
 
   ProcInputMode proc_mode;
   char proc_filter[64];
+  char proc_filter_prev[64]; // New field for storing previous filter
+  ProcSort proc_sort;
 
   //Containers
   Container cpu_box;
@@ -112,6 +122,9 @@ static void draw_hline(int x, int y, int w);
 int main(int argc, char *argv[]) {
   // Initialize termbox
   tb_init();
+
+  // Ensure special keys like arrows are decoded into TB_KEY_ARROW_*.
+  tb_set_input_mode(TB_INPUT_ESC);
   
   // Set up signal handling
   signal(SIGINT, handle_signal);
@@ -129,6 +142,8 @@ int main(int argc, char *argv[]) {
   shared_data.proc_scroll = 0;
   shared_data.proc_mode = PROC_MODE_NORMAL;
   shared_data.proc_filter[0] = '\0';
+  shared_data.proc_filter_prev[0] = '\0';
+  shared_data.proc_sort = PROC_SORT_CPU;
   proc_init_ctx(&shared_data.proc_ctx);
   
   // Create lists
@@ -220,6 +235,9 @@ void *stats_collection_thread(void *arg) {
     
     // Process list (only sample when on process tab to reduce work)
     if (shared_data.active_tab == TAB_PROCESSES) {
+      // apply selected sort mode before sampling
+      proc_set_sort_mode((int)shared_data.proc_sort);
+
       if (shared_data.proc_entries) {
         proc_free(shared_data.proc_entries);
         shared_data.proc_entries = NULL;
@@ -298,19 +316,10 @@ void *render_thread(void *arg) {
       return NULL;
     }
 
-    // Tab switching: always allowed
+    // Tab switching: Tab is the only way
     if (event.key == TB_KEY_TAB) {
       shared_data.active_tab = (shared_data.active_tab == TAB_VITALS) ? TAB_PROCESSES : TAB_VITALS;
       if (shared_data.active_tab == TAB_VITALS) shared_data.proc_mode = PROC_MODE_NORMAL;
-      continue;
-    }
-    if (event.ch == '1') {
-      shared_data.active_tab = TAB_VITALS;
-      shared_data.proc_mode = PROC_MODE_NORMAL;
-      continue;
-    }
-    if (event.ch == '2') {
-      shared_data.active_tab = TAB_PROCESSES;
       continue;
     }
 
@@ -350,16 +359,33 @@ static void draw_tabs(int width, ActiveTab active) {
 static void render_process_view(int width, int height) {
   int header_y = 1;
   int list_y = 2;
-  int list_h = height - 3;
+  int list_h = height - 4; // leave room for status bar above global footer
+  int status_y = height - 2;
 
+  // Header
   if (shared_data.proc_mode == PROC_MODE_FILTER) {
     tb_printf(0, header_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
-              "Filter: /%s  (Enter=apply, Esc=cancel, Backspace=delete)", shared_data.proc_filter);
+              "Filter: /%s ", shared_data.proc_filter);
+
+    // also show status bar while filtering
+    for (int x = 0; x < width; x++) tb_printf(x, status_y, TB_DEFAULT, TB_DEFAULT, " ");
+    tb_printf(0, status_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
+              " Tab=switch tabs   Enter=apply   Esc=cancel   Backspace=delete ");
   } else {
-    // Keep header aligned with row format: "%-7d %-2c %6.1f %7.1f %8lu  %.60s"
+    const char *sort_name = "CPU%";
+    if (shared_data.proc_sort == PROC_SORT_MEM) sort_name = "MEM%";
+    else if (shared_data.proc_sort == PROC_SORT_RSS) sort_name = "RSS";
+    else if (shared_data.proc_sort == PROC_SORT_PID) sort_name = "PID";
+
     tb_printf(0, header_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
-              "%-7s %-2s %6s %7s %8s  %-s   (j/k or arrows, /=filter, x=SIGTERM, X=SIGKILL)",
+              "%-7s %-2s %6s %7s %8s  %-s",
               "PID", "S", "CPU%", "MEM%", "RSS(KB)", "COMMAND");
+
+    // Bottom status bar
+    for (int x = 0; x < width; x++) tb_printf(x, status_y, TB_DEFAULT, TB_DEFAULT, " ");
+    tb_printf(0, status_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
+              " Tab=switch tabs   /=filter   1=CPU 2=MEM 3=RSS 4=PID   x=SIGTERM  X=SIGKILL   sort:%s ",
+              sort_name);
   }
 
   if (!shared_data.proc_entries || shared_data.proc_count <= 0) {
@@ -397,11 +423,17 @@ static void process_handle_key(short key, uint32_t ch) {
   // Filter mode eats most keys
   if (shared_data.proc_mode == PROC_MODE_FILTER) {
     if (key == TB_KEY_ESC) {
+      // cancel: restore previous filter
+      strncpy(shared_data.proc_filter, shared_data.proc_filter_prev, sizeof(shared_data.proc_filter));
+      shared_data.proc_filter[sizeof(shared_data.proc_filter) - 1] = '\0';
       shared_data.proc_mode = PROC_MODE_NORMAL;
       return;
     }
     if (key == TB_KEY_ENTER) {
       shared_data.proc_mode = PROC_MODE_NORMAL;
+      // apply: commit filter
+      strncpy(shared_data.proc_filter_prev, shared_data.proc_filter, sizeof(shared_data.proc_filter_prev));
+      shared_data.proc_filter_prev[sizeof(shared_data.proc_filter_prev) - 1] = '\0';
       shared_data.proc_selected = 0;
       shared_data.proc_scroll = 0;
       return;
@@ -425,9 +457,17 @@ static void process_handle_key(short key, uint32_t ch) {
   // Normal mode
   if (ch == '/') {
     shared_data.proc_mode = PROC_MODE_FILTER;
-    shared_data.proc_filter[0] = '\0';
+    // keep current filter for editing; also snapshot for cancel
+    strncpy(shared_data.proc_filter_prev, shared_data.proc_filter, sizeof(shared_data.proc_filter_prev));
+    shared_data.proc_filter_prev[sizeof(shared_data.proc_filter_prev) - 1] = '\0';
     return;
   }
+
+  // Sort selection (numbers)
+  if (ch == '1') { shared_data.proc_sort = PROC_SORT_CPU; return; }
+  if (ch == '2') { shared_data.proc_sort = PROC_SORT_MEM; return; }
+  if (ch == '3') { shared_data.proc_sort = PROC_SORT_RSS; return; }
+  if (ch == '4') { shared_data.proc_sort = PROC_SORT_PID; return; }
 
   if (ch == 'j' || key == TB_KEY_ARROW_DOWN) {
     if (shared_data.proc_selected < shared_data.proc_count - 1) shared_data.proc_selected++;
