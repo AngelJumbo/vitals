@@ -55,17 +55,22 @@ typedef struct Container {
 typedef struct {
   List *cpu_list;
   List *mem_list;
+  List *gpu_list;
+  List *vram_list;
   List *net_up_list;
   List *net_down_list;
   List *disk_lists[MAX_DISKS];
   char cpu_title[100];
   char mem_title[100];
+  char gpu_title[100];
+  char vram_title[100];
   char net_up_title[100];
   char net_down_title[100];
   char disk_titles[MAX_DISKS][100];
   int disk_count;
   DiskInfo *disk_info;
   char active_interface[32];
+  short has_gpu;
   volatile short running;
   pthread_mutex_t data_mutex;
   pthread_cond_t data_updated;
@@ -86,12 +91,18 @@ typedef struct {
   //Containers
   Container cpu_box;
   Container mem_box;
+  Container gpu_box;
+  Container vram_box;
+  Container hbox_cpu_mem;
+  Container hbox_gpu_mem;
   Container net_up_box;
   Container net_down_box;
   Container hbox_net;
   Container disk_boxes[MAX_DISKS];
   Container hbox_disks;
   Container vbox_main;
+  Container *hbox_cpu_mem_children[2];
+  Container *hbox_gpu_mem_children[2];
   Container *hbox_net_children[2];
   Container *hbox_disk_children[MAX_DISKS];
   Container *vbox_children[4];
@@ -150,8 +161,13 @@ int main(int argc, char *argv[]) {
   // Create lists
   shared_data.cpu_list = list_create();
   shared_data.mem_list = list_create();
+  shared_data.gpu_list = list_create();
+  shared_data.vram_list = list_create();
   shared_data.net_up_list = list_create();
   shared_data.net_down_list = list_create();
+
+  // Detect GPU once (layout stays stable)
+  shared_data.has_gpu = gpu_available();
   
   // Get active network interface
   get_active_interface(shared_data.active_interface, sizeof(shared_data.active_interface));
@@ -194,6 +210,21 @@ void *stats_collection_thread(void *arg) {
     float ram_usage = mem_perc();
     list_append_int(shared_data.cpu_list, (int) cpu_usage);
     list_append_int(shared_data.mem_list, (int) ram_usage);
+
+    // Collect GPU usage if available
+    if (shared_data.has_gpu) {
+      float gpu_usage = gpu_perc();
+      float vram_usage = vram_perc();
+
+      list_append_int(shared_data.gpu_list, gpu_usage >= 0 ? (int)gpu_usage : 0);
+      list_append_int(shared_data.vram_list, vram_usage >= 0 ? (int)vram_usage : 0);
+
+      if (gpu_usage >= 0) sprintf(shared_data.gpu_title, "Gpu: %.1f%%", gpu_usage);
+      else sprintf(shared_data.gpu_title, "Gpu: N/A");
+
+      if (vram_usage >= 0) sprintf(shared_data.vram_title, "Vram: %.1f%%", vram_usage);
+      else sprintf(shared_data.vram_title, "Vram: N/A");
+    }
     
     // Collect network stats
     unsigned long download_speed, upload_speed;
@@ -228,6 +259,10 @@ void *stats_collection_thread(void *arg) {
     // Trim the lists
     list_trim(shared_data.cpu_list, max_width); 
     list_trim(shared_data.mem_list, max_width); 
+    if (shared_data.has_gpu) {
+      list_trim(shared_data.gpu_list, max_width);
+      list_trim(shared_data.vram_list, max_width);
+    }
     list_trim(shared_data.net_up_list, max_width); 
     list_trim(shared_data.net_down_list, max_width); 
     for (int i = 0; i < shared_data.disk_count; i++) {
@@ -568,8 +603,20 @@ void setup_containers() {
   // Set up CPU and memory boxes
   shared_data.cpu_box = (Container){BOX, .box = {shared_data.cpu_list, shared_data.cpu_title, draw_bars_perc}};
   shared_data.mem_box = (Container){BOX, .box = {shared_data.mem_list, shared_data.mem_title, draw_bars_perc}};
+  shared_data.gpu_box = (Container){BOX, .box = {shared_data.gpu_list, shared_data.gpu_title, draw_bars_perc}};
+  shared_data.vram_box = (Container){BOX, .box = {shared_data.vram_list, shared_data.vram_title, draw_bars_perc}};
   shared_data.net_up_box = (Container){BOX, .box = {shared_data.net_up_list, shared_data.net_up_title, draw_scale_bars}};
   shared_data.net_down_box = (Container){BOX, .box = {shared_data.net_down_list, shared_data.net_down_title, draw_scale_bars}};
+
+  // CPU+RAM row when GPU exists
+  shared_data.hbox_cpu_mem_children[0] = &shared_data.cpu_box;
+  shared_data.hbox_cpu_mem_children[1] = &shared_data.mem_box;
+  shared_data.hbox_cpu_mem = (Container){HBOX, .group = {shared_data.hbox_cpu_mem_children, 2}};
+
+  // GPU+VRAM row when GPU exists
+  shared_data.hbox_gpu_mem_children[0] = &shared_data.gpu_box;
+  shared_data.hbox_gpu_mem_children[1] = &shared_data.vram_box;
+  shared_data.hbox_gpu_mem = (Container){HBOX, .group = {shared_data.hbox_gpu_mem_children, 2}};
   
   // Create network container
   shared_data.hbox_net_children[0] = &shared_data.net_up_box;
@@ -586,10 +633,18 @@ void setup_containers() {
   shared_data.hbox_disks = (Container){HBOX, .group = {shared_data.hbox_disk_children, shared_data.disk_count}};
   
   // Main container
-  shared_data.vbox_children[0] = &shared_data.cpu_box;
-  shared_data.vbox_children[1] = &shared_data.mem_box;
-  shared_data.vbox_children[2] = &shared_data.hbox_net;
-  shared_data.vbox_children[3] = &shared_data.hbox_disks;
+  if (shared_data.has_gpu) {
+    shared_data.vbox_children[0] = &shared_data.hbox_cpu_mem;
+    shared_data.vbox_children[1] = &shared_data.hbox_gpu_mem;
+    shared_data.vbox_children[2] = &shared_data.hbox_net;
+    shared_data.vbox_children[3] = &shared_data.hbox_disks;
+  } else {
+    // Keep existing layout when no GPU
+    shared_data.vbox_children[0] = &shared_data.cpu_box;
+    shared_data.vbox_children[1] = &shared_data.mem_box;
+    shared_data.vbox_children[2] = &shared_data.hbox_net;
+    shared_data.vbox_children[3] = &shared_data.hbox_disks;
+  }
   shared_data.vbox_main = (Container){VBOX, .group = {shared_data.vbox_children, 4}};
   
   pthread_mutex_unlock(&shared_data.data_mutex);
@@ -602,6 +657,8 @@ void cleanup_resources() {
   // Free lists
   list_free(shared_data.cpu_list);
   list_free(shared_data.mem_list);
+  list_free(shared_data.gpu_list);
+  list_free(shared_data.vram_list);
   list_free(shared_data.net_up_list);
   list_free(shared_data.net_down_list);
   
