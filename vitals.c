@@ -337,8 +337,8 @@ static void draw_hline(int x, int y, int w) {
 }
 
 static void draw_tabs(int width, ActiveTab active) {
-  // Centered tabs: [ Vitals ] [ Processes ]
-  const char *t1 = "Vitals";
+  // Centered tabs: [ Overview ] [ Processes ]
+  const char *t1 = "Overview";
   const char *t2 = "Processes";
 
   char left[64];
