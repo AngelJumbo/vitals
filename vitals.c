@@ -335,6 +335,17 @@ void *render_thread(void *arg) {
           shared_data.active_tab = TAB_PROCESSES;
         }
       }
+
+      // Click on the process header selects sort column
+      if (shared_data.active_tab == TAB_PROCESSES && shared_data.proc_mode == PROC_MODE_NORMAL &&
+          event.key == TB_KEY_MOUSE_LEFT && event.y == 1) {
+        // Column layout must match render_process_view() header rendering
+        // PID: 0..6, S: 8..9, CPU%: 11..16, MEM%: 18..24, RSS: 26..33
+        if (event.x >= 0 && event.x <= 6) shared_data.proc_sort = PROC_SORT_PID;
+        else if (event.x >= 11 && event.x <= 16) shared_data.proc_sort = PROC_SORT_CPU;
+        else if (event.x >= 18 && event.x <= 24) shared_data.proc_sort = PROC_SORT_MEM;
+        else if (event.x >= 26 && event.x <= 33) shared_data.proc_sort = PROC_SORT_RSS;
+      }
       continue;
     }
 
@@ -406,12 +417,42 @@ static void render_process_view(int width, int height) {
     else if (shared_data.proc_sort == PROC_SORT_RSS) sort_name = "RSS";
     else if (shared_data.proc_sort == PROC_SORT_PID) sort_name = "PID";
 
-    tb_printf(0, header_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
-              "%-7s %-2s %6s %7s %8s  %-s",
-              "PID", "S", "CPU%", "MEM%", "RSS(KB)", "COMMAND");
+    // Draw column headers with per-column highlighting
+    int x = 0;
+    uintattr_t on = TB_YELLOW | TB_BOLD;
+    uintattr_t off = TB_DEFAULT | TB_BOLD;
+
+    // PID (0..6)
+    tb_printf(x, header_y, shared_data.proc_sort == PROC_SORT_PID ? on : off, TB_DEFAULT, "%-7s", "PID");
+    x += 7;
+    tb_printf(x++, header_y, off, TB_DEFAULT, " ");
+
+    // State
+    tb_printf(x, header_y, off, TB_DEFAULT, "%-2s", "S");
+    x += 2;
+    tb_printf(x++, header_y, off, TB_DEFAULT, " ");
+
+    // CPU%
+    tb_printf(x, header_y, shared_data.proc_sort == PROC_SORT_CPU ? on : off, TB_DEFAULT, "%6s", "CPU%");
+    x += 6;
+    tb_printf(x++, header_y, off, TB_DEFAULT, " ");
+
+    // MEM%
+    tb_printf(x, header_y, shared_data.proc_sort == PROC_SORT_MEM ? on : off, TB_DEFAULT, "%7s", "MEM%");
+    x += 7;
+    tb_printf(x++, header_y, off, TB_DEFAULT, " ");
+
+    // RSS
+    tb_printf(x, header_y, shared_data.proc_sort == PROC_SORT_RSS ? on : off, TB_DEFAULT, "%8s", "RSS(KB)");
+    x += 8;
+    tb_printf(x, header_y, off, TB_DEFAULT, "  ");
+    x += 2;
+
+    // COMMAND
+    tb_printf(x, header_y, off, TB_DEFAULT, "%-s", "COMMAND");
 
     // Bottom status bar
-    for (int x = 0; x < width; x++) tb_printf(x, status_y, TB_DEFAULT, TB_DEFAULT, " ");
+    for (int i = 0; i < width; i++) tb_printf(i, status_y, TB_DEFAULT, TB_DEFAULT, " ");
     tb_printf(0, status_y, TB_DEFAULT | TB_BOLD, TB_DEFAULT,
               " Tab=switch tabs   /=filter   1=CPU 2=MEM 3=RSS 4=PID   x=SIGTERM  X=SIGKILL   sort:%s ",
               sort_name);
