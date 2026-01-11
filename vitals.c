@@ -8,7 +8,7 @@
 #define MAX_DISKS 8
 #define STR_LEN(s) (sizeof(s) - 1) 
 #define APP_NAME " vitals "
-#define APP_VERSION " 0.0.3 "
+#define APP_VERSION " 0.0.4 "
 #define ALERT_MESSAGE "The terminal is too small."
 #define MIN_WIDTH 80
 #define MIN_HEIGHT 20
