@@ -127,7 +127,7 @@ void list_trim(List *list, int width);
 
 static void draw_tabs(int width, ActiveTab active);
 static void render_process_view(int width, int height);
-static void process_handle_key(short key, uint32_t ch);
+static void process_handle_key(int key, uint32_t ch);
 static void draw_hline(int x, int y, int w);
 
 int main(int argc, char *argv[]) {
@@ -524,7 +524,7 @@ static void render_process_view(int width, int height) {
   }
 }
 
-static void process_handle_key(short key, uint32_t ch) {
+static void process_handle_key(int key, uint32_t ch) {
   // Filter mode eats most keys
   if (shared_data.proc_mode == PROC_MODE_FILTER) {
     if (key == TB_KEY_ESC) {

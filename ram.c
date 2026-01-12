@@ -1,31 +1,24 @@
-#include "modules.h"
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#include <stddef.h>
 
 float mem_perc() {
-  FILE *meminfo = fopen("/proc/meminfo", "r");
-    if (meminfo == NULL) {
-        perror("Error opening /proc/meminfo");
-        return -1;
-    }
+    unsigned long total;
+    int page_size;
+    unsigned int free_count;
+    size_t len, p_len, f_len;
 
-    char line[256];
-    unsigned long total_mem = 0;
-    unsigned long available_mem = 0;
+    len = sizeof(total);
+    p_len = sizeof(page_size);
+    f_len = sizeof(free_count);
 
-    while (fgets(line, sizeof(line), meminfo)) {
-        if (strncmp(line, "MemTotal:", 9) == 0) {
-            sscanf(line, "MemTotal: %lu kB", &total_mem);
-        }
-        if (strncmp(line, "MemAvailable:", 12) == 0) {
-            sscanf(line, "MemAvailable: %lu kB", &available_mem);
-        }
-    }
+    // Logic must be INSIDE the function
+    if (sysctlbyname("hw.physmem", &total, &len, NULL, 0) < 0) return -1;
+    if (sysctlbyname("hw.pagesize", &page_size, &p_len, NULL, 0) < 0) return -1;
+    if (sysctlbyname("vm.stats.vm.v_free_count", &free_count, &f_len, NULL, 0) < 0) return -1;
 
-    fclose(meminfo);
+    long free_mem = (long)free_count * page_size;
+    float used_percent = 100.0f * (float)(total - free_mem) / (float)total;
 
-    if (total_mem == 0) {
-        return -1;
-    }
-
-    return (((float)(total_mem - available_mem) / total_mem) * 100);
-    
+    return used_percent;
 }
