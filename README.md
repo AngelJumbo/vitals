@@ -1,5 +1,5 @@
 # vitals
-System usage visualizer and top replacement for Linux
+System usage visualizer and top replacement for Linux and FreeBSD
 ![vitals](https://i.imgur.com/MeVOXKK.png)
 ## Installation
 ```
@@ -8,7 +8,8 @@ cd vitals
 sudo make install
 ```
 ## Freebsd Installation
-Yes you will need to download gmake
+Yes you will need to download gmake.
+(I haven't tested it on openBSD or netBSD yet I will in the next few days) 
 ```
 git clone https://github.com/AngelJumbo/vitals
 cd vitals/freebsd
