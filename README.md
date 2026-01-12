@@ -9,7 +9,8 @@ sudo make install
 ```
 ## Freebsd Installation
 Yes you will need to download gmake.
-(I haven't tested it on openBSD or netBSD yet I will in the next few days) 
+(I haven't tested it on openBSD or netBSD yet I will in the next few days).
+If you have an issue please make an issue and i will fix it as soon as I can :)
 ```
 git clone https://github.com/AngelJumbo/vitals
 cd vitals/freebsd
