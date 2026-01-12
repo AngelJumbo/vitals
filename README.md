@@ -1,7 +1,7 @@
 # vitals
 System usage visualizer and top/htop replacement for Linux and FreeBSD
 ![vitals](https://i.imgur.com/MeVOXKK.png)
-## Installation
+## Linux Installation
 ```
 git clone https://github.com/AngelJumbo/vitals
 cd vitals
