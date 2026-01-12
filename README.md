@@ -1,5 +1,5 @@
 # vitals
-System usage visualizer and top replacement for Linux and FreeBSD
+System usage visualizer and top/htop replacement for Linux and FreeBSD
 ![vitals](https://i.imgur.com/MeVOXKK.png)
 ## Installation
 ```
