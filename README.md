@@ -19,7 +19,7 @@ sudo gmake install
 
 ## Before you ask me
 ### GPU?
-Done. The gpu have been added
+Done. The gpu has been added
 ### Is this another top/htop replacement?
 ~~No, just a system usage visualizer~~ It is, press TAB to view process.
 ### Why? Btop already shows the system usage
