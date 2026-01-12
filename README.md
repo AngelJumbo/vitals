@@ -1,4 +1,4 @@
-# vitals
+# Vitals
 System usage visualizer and top/htop replacement for Linux and FreeBSD
 ![vitals](https://i.imgur.com/MeVOXKK.png)
 ## Linux Installation
@@ -18,7 +18,7 @@ sudo gmake install
 
 ## Before you ask me
 ### GPU?
-~~Yes, I will add it. But if you want to contribute the necessary code I would gladly accept it :'), just try to put it next to the ram box.~~ Done.
+Done. The gpu have been added
 ### Is this another top/htop replacement?
 ~~No, just a system usage visualizer~~ It is, press TAB to view process.
 ### Why? Btop already shows the system usage
