@@ -23,6 +23,6 @@ sudo gmake install
 ### Why? Btop already shows the system usage
 I wanted something simpler, less busy and readable.
 ### macOS?
-I don't run macos, but I will accept contributions to support them.
+I don't run macos, but I will accept contributions to support it.
 ### Flatpak?
 I'm too lazy for that... sorry.
