@@ -12,7 +12,6 @@ float mem_perc() {
     p_len = sizeof(page_size);
     f_len = sizeof(free_count);
 
-    // Logic must be INSIDE the function
     if (sysctlbyname("hw.physmem", &total, &len, NULL, 0) < 0) return -1;
     if (sysctlbyname("hw.pagesize", &page_size, &p_len, NULL, 0) < 0) return -1;
     if (sysctlbyname("vm.stats.vm.v_free_count", &free_count, &f_len, NULL, 0) < 0) return -1;

@@ -3,7 +3,6 @@
 #include <string.h>
 #include "utils.h"
 
-// 1. Format network speed for display
 void format_speed(char *buf, size_t len, unsigned long bytes) {
     if (bytes >= 1024 * 1024 * 1024) {
         snprintf(buf, len, "%.2f GB/s", bytes / (1024.0 * 1024.0 * 1024.0));
@@ -16,7 +15,6 @@ void format_speed(char *buf, size_t len, unsigned long bytes) {
     }
 }
 
-// 2. Create a new linked list for graph data
 List* list_create() {
     List *list = malloc(sizeof(List));
     list->first = NULL;
@@ -25,7 +23,6 @@ List* list_create() {
     return list;
 }
 
-// 3. Append integer data (for CPU/RAM percentages)
 void list_append_int(List *list, int value) {
     Node *node = malloc(sizeof(Node));
     node->value = malloc(sizeof(int));
@@ -37,7 +34,6 @@ void list_append_int(List *list, int value) {
     list->count++;
 }
 
-// 4. Append long data (for Network speeds)
 void list_append_u_long(List *list, unsigned long value) {
     Node *node = malloc(sizeof(Node));
     node->value = malloc(sizeof(unsigned long));
@@ -49,17 +45,14 @@ void list_append_u_long(List *list, unsigned long value) {
     list->count++;
 }
 
-// 5. Helper to retrieve integer values from nodes
 int node_get_int(Node *node) {
     return *(int*)node->value;
 }
 
-// 6. Helper to retrieve long values from nodes
 unsigned long node_get_u_long(Node *node) {
     return *(unsigned long*)node->value;
 }
 
-// 7. Free the list memory
 void list_free(List *list) {
     Node *node = list->first;
     while (node) {

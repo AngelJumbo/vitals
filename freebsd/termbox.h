@@ -61,7 +61,6 @@ extern "C" {
 #define TB_VERSION_STR "2.1.0-dev"
 
 #if defined(TB_LIB_OPTS) || 0 // __tb_lib_opts
-// Ensure consistent compile-time options when using as a library
 #undef TB_OPT_TRUECOLOR
 #undef TB_OPT_EGC
 #undef TB_OPT_PRINTF_BUF
@@ -70,7 +69,6 @@ extern "C" {
 #define TB_OPT_EGC
 #endif
 
-/* ASCII key constants (tb_event.key) */
 #define TB_KEY_CTRL_TILDE       0x00
 #define TB_KEY_CTRL_2           0x00 /* clash with 'CTRL_TILDE'     */
 #define TB_KEY_CTRL_A           0x01

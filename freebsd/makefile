@@ -12,7 +12,7 @@ clean:
 
 .PHONY: install
 install: vitals
-	install 				-D vitals 		$(DESTDIR)$(PREFIX)/bin/vitals
+	install -m 755 vitals $(DESTDIR)$(PREFIX)/bin/vitals
 
 .PHONY: unistall
 unistall:
