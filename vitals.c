@@ -386,7 +386,7 @@ void *render_thread(void *arg) {
 
     if (event.type != TB_EVENT_KEY) continue;
 
-    if (event.ch == 'q' || event.key == TB_KEY_CTRL_C || event.key == TB_KEY_ESC) {
+    if (event.ch == 'q' || event.key == TB_KEY_CTRL_C) {
       shared_data.running = 0;
       return NULL;
     }
