@@ -14,7 +14,7 @@
 #define MIN_HEIGHT 20
 
 // Tabs
-typedef enum { TAB_VITALS = 0, TAB_PROCESSES = 1 } ActiveTab;
+typedef enum { TAB_OVERVIEW = 0, TAB_CPU = 1, TAB_GPU = 2, TAB_PROCESSES = 3 } ActiveTab;
 
 // Process sorting
 typedef enum {
@@ -54,16 +54,20 @@ typedef struct Container {
 
 typedef struct {
   List *cpu_list;
+  List *cpu_temp_list;
   List *mem_list;
   List *gpu_list;
   List *vram_list;
+  List *gpu_temp_list;
   List *net_up_list;
   List *net_down_list;
   List *disk_lists[MAX_DISKS];
   char cpu_title[100];
+  char cpu_temp_title[100];
   char mem_title[100];
   char gpu_title[100];
   char vram_title[100];
+  char gpu_temp_title[100];
   char net_up_title[100];
   char net_down_title[100];
   char disk_titles[MAX_DISKS][100];
@@ -71,6 +75,14 @@ typedef struct {
   DiskInfo *disk_info;
   char active_interface[32];
   short has_gpu;
+
+  // Detailed CPU/GPU stats
+  int cpu_core_count;
+  float cpu_core_perc[128];
+  float cpu_temp_c;
+  float gpu_temp_c;
+  unsigned long long gpu_vram_used_b;
+  unsigned long long gpu_vram_total_b;
   volatile short running;
   pthread_mutex_t data_mutex;
   pthread_cond_t data_updated;
@@ -129,6 +141,12 @@ static void draw_tabs(int width, ActiveTab active);
 static void render_process_view(int width, int height);
 static void process_handle_key(uint16_t key, uint32_t ch);
 static void draw_hline(int x, int y, int w);
+static void render_cpu_view(int width, int height);
+static void render_gpu_view(int width, int height);
+static void draw_sparkline(int x, int y, int w, List *list, int max_val);
+static void draw_hbar(int x, int y, int w, int percent);
+static ActiveTab next_tab(ActiveTab cur);
+static void draw_frame(int x, int y, int w, int h, const char *title);
 
 int main(int argc, char *argv[]) {
   // Initialize termbox
@@ -147,7 +165,7 @@ int main(int argc, char *argv[]) {
   pthread_cond_init(&shared_data.data_updated, NULL);
   shared_data.running = 1;
 
-  shared_data.active_tab = TAB_VITALS;
+  shared_data.active_tab = TAB_OVERVIEW;
   shared_data.proc_entries = NULL;
   shared_data.proc_count = 0;
   shared_data.proc_selected = 0;
@@ -160,14 +178,23 @@ int main(int argc, char *argv[]) {
   
   // Create lists
   shared_data.cpu_list = list_create();
+  shared_data.cpu_temp_list = list_create();
   shared_data.mem_list = list_create();
   shared_data.gpu_list = list_create();
   shared_data.vram_list = list_create();
+  shared_data.gpu_temp_list = list_create();
   shared_data.net_up_list = list_create();
   shared_data.net_down_list = list_create();
 
   // Detect GPU once (layout stays stable)
   shared_data.has_gpu = gpu_available();
+
+  shared_data.cpu_core_count = 0;
+  memset(shared_data.cpu_core_perc, 0, sizeof(shared_data.cpu_core_perc));
+  shared_data.cpu_temp_c = -1;
+  shared_data.gpu_temp_c = -1;
+  shared_data.gpu_vram_used_b = 0;
+  shared_data.gpu_vram_total_b = 0;
   
   // Get active network interface
   get_active_interface(shared_data.active_interface, sizeof(shared_data.active_interface));
@@ -205,25 +232,50 @@ void *stats_collection_thread(void *arg) {
   while (shared_data.running) {
     pthread_mutex_lock(&shared_data.data_mutex);
 
-    // Collect CPU and memory usage
-    float cpu_usage = cpu_perc();
+    // Collect CPU (total + per-core) and memory usage
+    float cpu_usage = -1;
+    int cores = 0;
+    (void)cpu_read_perc_ex(&cpu_usage, shared_data.cpu_core_perc, (int)(sizeof(shared_data.cpu_core_perc) / sizeof(shared_data.cpu_core_perc[0])), &cores);
+    shared_data.cpu_core_count = cores;
+    shared_data.cpu_temp_c = cpu_temp_c();
+
     float ram_usage = mem_perc();
     list_append_int(shared_data.cpu_list, (int) cpu_usage);
     list_append_int(shared_data.mem_list, (int) ram_usage);
 
+    // CPU temp history (clamped to 0..100 for percent graph)
+    int cpu_tc = (shared_data.cpu_temp_c >= 0) ? (int)(shared_data.cpu_temp_c + 0.5f) : 0;
+    if (cpu_tc < 0) cpu_tc = 0;
+    if (cpu_tc > 100) cpu_tc = 100;
+    list_append_int(shared_data.cpu_temp_list, cpu_tc);
+
     // Collect GPU usage if available
     if (shared_data.has_gpu) {
-      float gpu_usage = gpu_perc();
-      float vram_usage = vram_perc();
+      float gpu_usage = -1;
+      float vram_usage = -1;
+      float gpu_temp = -1;
+      unsigned long long used_b = 0, total_b = 0;
+      (void)gpu_read_stats_ex(&gpu_usage, &vram_usage, &used_b, &total_b, &gpu_temp);
+      shared_data.gpu_temp_c = gpu_temp;
+      shared_data.gpu_vram_used_b = used_b;
+      shared_data.gpu_vram_total_b = total_b;
 
       list_append_int(shared_data.gpu_list, gpu_usage >= 0 ? (int)gpu_usage : 0);
       list_append_int(shared_data.vram_list, vram_usage >= 0 ? (int)vram_usage : 0);
+
+      int gpu_tc = (gpu_temp >= 0) ? (int)(gpu_temp + 0.5f) : 0;
+      if (gpu_tc < 0) gpu_tc = 0;
+      if (gpu_tc > 100) gpu_tc = 100;
+      list_append_int(shared_data.gpu_temp_list, gpu_tc);
 
       if (gpu_usage >= 0) sprintf(shared_data.gpu_title, "Gpu: %.1f%%", gpu_usage);
       else sprintf(shared_data.gpu_title, "Gpu: N/A");
 
       if (vram_usage >= 0) sprintf(shared_data.vram_title, "Vram: %.1f%%", vram_usage);
       else sprintf(shared_data.vram_title, "Vram: N/A");
+
+      if (gpu_temp >= 0) sprintf(shared_data.gpu_temp_title, "Gpu temp: %.1fC", gpu_temp);
+      else sprintf(shared_data.gpu_temp_title, "Gpu temp: N/A");
     }
     
     // Collect network stats
@@ -234,6 +286,8 @@ void *stats_collection_thread(void *arg) {
     
     // Update titles
     sprintf(shared_data.cpu_title, "Cpu: %.1f%%", cpu_usage);
+    if (shared_data.cpu_temp_c >= 0) sprintf(shared_data.cpu_temp_title, "Cpu temp: %.1fC", shared_data.cpu_temp_c);
+    else sprintf(shared_data.cpu_temp_title, "Cpu temp: N/A");
     sprintf(shared_data.mem_title, "Ram: %.1f%%", ram_usage);
     
     char speed_str[16];
@@ -258,10 +312,12 @@ void *stats_collection_thread(void *arg) {
 
     // Trim the lists
     list_trim(shared_data.cpu_list, max_width); 
+    list_trim(shared_data.cpu_temp_list, max_width);
     list_trim(shared_data.mem_list, max_width); 
     if (shared_data.has_gpu) {
       list_trim(shared_data.gpu_list, max_width);
       list_trim(shared_data.vram_list, max_width);
+      list_trim(shared_data.gpu_temp_list, max_width);
     }
     list_trim(shared_data.net_up_list, max_width); 
     list_trim(shared_data.net_down_list, max_width); 
@@ -325,8 +381,12 @@ void *render_thread(void *arg) {
       draw_tabs(width, shared_data.active_tab);
 
       // Render active tab content below header
-      if (shared_data.active_tab == TAB_VITALS) {
+      if (shared_data.active_tab == TAB_OVERVIEW) {
         container_render(0, 1, width, height - 1, &shared_data.vbox_main);
+      } else if (shared_data.active_tab == TAB_CPU) {
+        render_cpu_view(width, height);
+      } else if (shared_data.active_tab == TAB_GPU) {
+        render_gpu_view(width, height);
       } else {
         render_process_view(width, height);
       }
@@ -349,25 +409,36 @@ void *render_thread(void *arg) {
       // Click on the top row toggles/selects tabs
       if (event.y == 0 && event.key == TB_KEY_MOUSE_LEFT) {
         // Recompute tab hit-boxes exactly like draw_tabs()
-        const char *t1 = "Overview";
-        const char *t2 = "Processes";
-        char left[64];
-        char right[64];
-        snprintf(left, sizeof(left), "[ %s ]", t1);
-        snprintf(right, sizeof(right), "[ %s ]", t2);
-        int tabs_w = (int)strlen(left) + 1 + (int)strlen(right);
+        const char *labels[4];
+        ActiveTab tabs[4];
+        int count = 0;
+        labels[count] = "Overview"; tabs[count++] = TAB_OVERVIEW;
+        labels[count] = "CPU";      tabs[count++] = TAB_CPU;
+        if (shared_data.has_gpu) { labels[count] = "GPU"; tabs[count++] = TAB_GPU; }
+        labels[count] = "Processes"; tabs[count++] = TAB_PROCESSES;
+
+        char rendered[4][64];
+        int widths[4];
+        int tabs_w = 0;
+        for (int i = 0; i < count; i++) {
+          snprintf(rendered[i], sizeof(rendered[i]), "[ %s ]", labels[i]);
+          widths[i] = (int)strlen(rendered[i]);
+          tabs_w += widths[i];
+          if (i != count - 1) tabs_w += 1;
+        }
         int start_x = (width > tabs_w) ? (width - tabs_w) / 2 : 0;
 
-        int left_x1 = start_x;
-        int left_x2 = start_x + (int)strlen(left) - 1;
-        int right_x1 = start_x + (int)strlen(left) + 1;
-        int right_x2 = right_x1 + (int)strlen(right) - 1;
-
-        if (event.x >= left_x1 && event.x <= left_x2) {
-          shared_data.active_tab = TAB_VITALS;
-          shared_data.proc_mode = PROC_MODE_NORMAL;
-        } else if (event.x >= right_x1 && event.x <= right_x2) {
-          shared_data.active_tab = TAB_PROCESSES;
+        int x = start_x;
+        for (int i = 0; i < count; i++) {
+          int x1 = x;
+          int x2 = x + widths[i] - 1;
+          if (event.x >= x1 && event.x <= x2) {
+            shared_data.active_tab = tabs[i];
+            if (shared_data.active_tab == TAB_OVERVIEW) shared_data.proc_mode = PROC_MODE_NORMAL;
+            if (shared_data.active_tab != TAB_PROCESSES) shared_data.proc_mode = PROC_MODE_NORMAL;
+            break;
+          }
+          x += widths[i] + 1;
         }
       }
 
@@ -393,8 +464,8 @@ void *render_thread(void *arg) {
 
     // Tab switching: Tab is the only way
     if (event.key == TB_KEY_TAB) {
-      shared_data.active_tab = (shared_data.active_tab == TAB_VITALS) ? TAB_PROCESSES : TAB_VITALS;
-      if (shared_data.active_tab == TAB_VITALS) shared_data.proc_mode = PROC_MODE_NORMAL;
+      shared_data.active_tab = next_tab(shared_data.active_tab);
+      if (shared_data.active_tab != TAB_PROCESSES) shared_data.proc_mode = PROC_MODE_NORMAL;
       continue;
     }
 
@@ -412,23 +483,303 @@ static void draw_hline(int x, int y, int w) {
 }
 
 static void draw_tabs(int width, ActiveTab active) {
-  // Centered tabs: [ Overview ] [ Processes ]
-  const char *t1 = "Overview";
-  const char *t2 = "Processes";
+  const char *labels[4];
+  ActiveTab tabs[4];
+  int count = 0;
 
-  char left[64];
-  char right[64];
-  snprintf(left, sizeof(left), "[ %s ]", t1);
-  snprintf(right, sizeof(right), "[ %s ]", t2);
+  labels[count] = "Overview"; tabs[count++] = TAB_OVERVIEW;
+  labels[count] = "CPU";      tabs[count++] = TAB_CPU;
+  if (shared_data.has_gpu) { labels[count] = "GPU"; tabs[count++] = TAB_GPU; }
+  labels[count] = "Processes"; tabs[count++] = TAB_PROCESSES;
 
-  int tabs_w = (int)strlen(left) + 1 + (int)strlen(right);
+  char rendered[4][64];
+  int widths[4];
+  int tabs_w = 0;
+  for (int i = 0; i < count; i++) {
+    snprintf(rendered[i], sizeof(rendered[i]), "[ %s ]", labels[i]);
+    widths[i] = (int)strlen(rendered[i]);
+    tabs_w += widths[i];
+    if (i != count - 1) tabs_w += 1;
+  }
   int start_x = (width > tabs_w) ? (width - tabs_w) / 2 : 0;
 
   uintattr_t a_fg = TB_DEFAULT | TB_BOLD;
   uintattr_t i_fg = TB_DEFAULT;
 
-  tb_printf(start_x, 0, active == TAB_VITALS ? a_fg : i_fg, TB_DEFAULT, "%s", left);
-  tb_printf(start_x + (int)strlen(left) + 1, 0, active == TAB_PROCESSES ? a_fg : i_fg, TB_DEFAULT, "%s", right);
+  int x = start_x;
+  for (int i = 0; i < count; i++) {
+    tb_printf(x, 0, active == tabs[i] ? a_fg : i_fg, TB_DEFAULT, "%s", rendered[i]);
+    x += widths[i] + 1;
+  }
+}
+
+static ActiveTab next_tab(ActiveTab cur) {
+  // Cycle tabs: Overview -> CPU -> (GPU?) -> Processes -> Overview
+  if (cur == TAB_OVERVIEW) return TAB_CPU;
+  if (cur == TAB_CPU) return shared_data.has_gpu ? TAB_GPU : TAB_PROCESSES;
+  if (cur == TAB_GPU) return TAB_PROCESSES;
+  return TAB_OVERVIEW;
+}
+
+static void draw_sparkline(int x, int y, int w, List *list, int max_val) {
+  if (!list || w <= 0) return;
+  if (max_val <= 0) max_val = 100;
+
+  int count = list->count;
+  Node *node = list->first;
+  while (count > w) {
+    node = node->next;
+    count--;
+  }
+  int pad = w - count;
+  for (int i = 0; i < pad; i++) tb_printf(x + i, y, TB_DEFAULT, TB_DEFAULT, " ");
+
+  int i = pad;
+  while (node && i < w) {
+    int v = node_get_int(node);
+    if (v < 0) v = 0;
+    if (v > max_val) v = max_val;
+    int idx = (v * 8) / (max_val + 1);
+    if (idx < 0) idx = 0;
+    if (idx > 7) idx = 7;
+    tb_printf(x + i, y, TB_CYAN, TB_DEFAULT, "%s", blocks[idx]);
+    node = node->next;
+    i++;
+  }
+}
+
+static void draw_frame(int x, int y, int w, int h, const char *title) {
+  if (w < 4 || h < 3) return;
+  int x2 = x + w;
+  int y2 = y + h;
+
+  short skipLine = 0;
+  int hLine = (y2 - y) / 2 + y - 1;
+
+  char lineChar[2] = {(y2 - y) % 2 == 0 ? '_' : '-'};
+  hLine += (lineChar[0] == '-' ? 1 : 0);
+
+  for (int i = x + 1; i < x2 - 1; i++) {
+    tb_printf(i, y, TB_DEFAULT, TB_DEFAULT, box[4]);
+    tb_printf(i, y2 - 1, TB_DEFAULT, TB_DEFAULT, box[4]);
+    if (skipLine) tb_printf(i, hLine, TB_DEFAULT, TB_DEFAULT, lineChar);
+    skipLine = !skipLine;
+  }
+  for (int i = y + 1; i < y2 - 1; i++) {
+    tb_printf(x, i, TB_DEFAULT, TB_DEFAULT, box[5]);
+    tb_printf(x2 - 1, i, TB_DEFAULT, TB_DEFAULT, box[5]);
+  }
+  tb_printf(x, y, TB_DEFAULT, TB_DEFAULT, box[0]);
+  tb_printf(x2 - 1, y, TB_DEFAULT, TB_DEFAULT, box[1]);
+  tb_printf(x, y2 - 1, TB_DEFAULT, TB_DEFAULT, box[2]);
+  tb_printf(x2 - 1, y2 - 1, TB_DEFAULT, TB_DEFAULT, box[3]);
+
+  if (title && title[0]) {
+    tb_printf(x + 2, y, TB_DEFAULT | TB_BOLD, TB_DEFAULT, " %s ", title);
+  }
+}
+
+static void draw_hbar(int x, int y, int w, int percent) {
+  if (w <= 0) return;
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+
+  int fill = (percent * w) / 100;
+  uintattr_t color = TB_GREEN;
+  if (percent >= 80) color = TB_RED;
+  else if (percent >= 50) color = TB_YELLOW;
+
+  for (int i = 0; i < w; i++) {
+    if (i < fill) tb_printf(x + i, y, color, TB_DEFAULT, "█");
+    else tb_printf(x + i, y, TB_DEFAULT, TB_DEFAULT, " ");
+  }
+}
+
+static void render_cpu_view(int width, int height) {
+  int content_y = 1;
+  int usable_h = height - 2; // keep footer
+  if (usable_h < 6) {
+    tb_printf(0, content_y, TB_YELLOW | TB_BOLD, TB_DEFAULT, "Terminal too small for CPU view.");
+    return;
+  }
+
+  // Layout:
+  // [ Summary ]
+  // [ History ] [ Per-core ]
+  int margin = 1;
+  int x0 = margin;
+  int w0 = width - 2 * margin;
+  int y0 = content_y;
+  int sum_h = 5;
+  if (sum_h > usable_h - 3) sum_h = 4;
+
+  int below_y = y0 + sum_h;
+  int below_h = usable_h - sum_h;
+  if (below_h < 6) below_h = 6;
+
+  int left_w = (w0 / 3);
+  if (left_w < 26) left_w = 26;
+  int right_w = w0 - left_w - 1;
+  if (right_w < 30) {
+    // fall back to single column
+    left_w = w0;
+    right_w = 0;
+  }
+
+  // Summary box
+  draw_frame(x0, y0, w0, sum_h, " CPU ");
+  int total = 0;
+  if (shared_data.cpu_list && shared_data.cpu_list->last) total = node_get_int(shared_data.cpu_list->last);
+  if (total < 0) total = 0;
+  if (total > 100) total = 100;
+
+  int sx = x0 + 2;
+  int sy = y0 + 1;
+  int sw = w0 - 4;
+  if (sw < 10) sw = 10;
+
+  tb_printf(sx, sy, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "Total");
+  draw_hbar(sx + 7, sy, sw - 18, total);
+  tb_printf(sx + sw - 8, sy, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "%3d%%", total);
+  sy++;
+
+  if (shared_data.cpu_temp_c >= 0) {
+    tb_printf(sx, sy, TB_DEFAULT, TB_DEFAULT, "Temp: %.1fC   Cores: %d", shared_data.cpu_temp_c, shared_data.cpu_core_count);
+  } else {
+    tb_printf(sx, sy, TB_DEFAULT, TB_DEFAULT, "Temp: N/A    Cores: %d", shared_data.cpu_core_count);
+  }
+
+  // History box
+  draw_frame(x0, below_y, left_w, below_h, " History ");
+  int hx = x0 + 2;
+  int hy = below_y + 1;
+  int hw = left_w - 4;
+  if (hw > 10) {
+    tb_printf(hx, hy, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "CPU%%");
+    draw_sparkline(hx, hy + 1, hw, shared_data.cpu_list, 100);
+    hy += 3;
+    tb_printf(hx, hy, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "Temp");
+    draw_sparkline(hx, hy + 1, hw, shared_data.cpu_temp_list, 100);
+  }
+
+  // Per-core box
+  if (right_w > 0) {
+    draw_frame(x0 + left_w + 1, below_y, right_w, below_h, " Per-core ");
+  } else {
+    draw_frame(x0, below_y, left_w, below_h, " Per-core ");
+  }
+
+  int px = (right_w > 0) ? (x0 + left_w + 3) : (x0 + 2);
+  int py = below_y + 1;
+  int pw = (right_w > 0) ? (right_w - 4) : (left_w - 4);
+  int ph = below_h - 2;
+
+  if (pw < 20 || ph < 3) return;
+
+  int cols = (pw >= 70) ? 2 : 1;
+  int col_gap = 2;
+  int col_w = (cols == 2) ? (pw - col_gap) / 2 : pw;
+  int rows = ph;
+  if (rows < 1) rows = 1;
+
+  int label_w = 6;
+  int pct_w = 5;
+  int bar_w = col_w - label_w - pct_w - 2;
+  if (bar_w < 8) bar_w = 8;
+
+  int max_cores = shared_data.cpu_core_count;
+  int cap = (int)(sizeof(shared_data.cpu_core_perc) / sizeof(shared_data.cpu_core_perc[0]));
+  if (max_cores > cap) max_cores = cap;
+  int max_show = rows * cols;
+  int to_show = max_cores;
+  if (to_show > max_show) to_show = max_show;
+
+  for (int i = 0; i < to_show; i++) {
+    int col = (cols == 2) ? (i / rows) : 0;
+    int row = (cols == 2) ? (i % rows) : i;
+    int rx = px + col * (col_w + col_gap);
+    int ry = py + row;
+
+    float p = shared_data.cpu_core_perc[i];
+    int ip = (p >= 0) ? (int)(p + 0.5f) : 0;
+    if (ip < 0) ip = 0;
+    if (ip > 100) ip = 100;
+
+    tb_printf(rx, ry, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "c%02d", i);
+    draw_hbar(rx + label_w, ry, bar_w, ip);
+    tb_printf(rx + label_w + bar_w + 1, ry, TB_DEFAULT, TB_DEFAULT, "%3d%%", ip);
+  }
+
+  if (to_show < max_cores) {
+    tb_printf(px, below_y + below_h - 2, TB_YELLOW | TB_BOLD, TB_DEFAULT,
+              "Showing %d/%d cores (enlarge terminal)", to_show, max_cores);
+  }
+}
+
+static void render_gpu_view(int width, int height) {
+  int content_y = 1;
+  int usable_h = height - 2;
+  if (usable_h < 6) {
+    tb_printf(0, content_y, TB_YELLOW | TB_BOLD, TB_DEFAULT, "Terminal too small for GPU view.");
+    return;
+  }
+
+  int margin = 1;
+  int x0 = margin;
+  int w0 = width - 2 * margin;
+  int y0 = content_y;
+
+  draw_frame(x0, y0, w0, usable_h, " GPU ");
+
+  int x = x0 + 2;
+  int y = y0 + 1;
+  int w = w0 - 4;
+
+  if (!shared_data.has_gpu) {
+    tb_printf(x, y, TB_YELLOW | TB_BOLD, TB_DEFAULT, "No GPU detected (tab will appear only if detected on startup). ");
+    return;
+  }
+
+  int util = 0;
+  int vram = 0;
+  if (shared_data.gpu_list && shared_data.gpu_list->last) util = node_get_int(shared_data.gpu_list->last);
+  if (shared_data.vram_list && shared_data.vram_list->last) vram = node_get_int(shared_data.vram_list->last);
+  if (util < 0) util = 0;
+  if (util > 100) util = 100;
+  if (vram < 0) vram = 0;
+  if (vram > 100) vram = 100;
+
+  // Util bar
+  tb_printf(x, y, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "Util");
+  draw_hbar(x + 6, y, w - 16, util);
+  tb_printf(x + w - 5, y, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "%3d%%", util);
+  y++;
+
+  // VRAM bar
+  tb_printf(x, y, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "VRAM");
+  draw_hbar(x + 6, y, w - 16, vram);
+  tb_printf(x + w - 5, y, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "%3d%%", vram);
+  y++;
+
+  if (shared_data.gpu_temp_c >= 0) tb_printf(x, y++, TB_DEFAULT, TB_DEFAULT, "Temp: %.1fC", shared_data.gpu_temp_c);
+  else tb_printf(x, y++, TB_DEFAULT, TB_DEFAULT, "Temp: N/A");
+
+  if (shared_data.gpu_vram_total_b > 0) {
+    double used_mib = (double)shared_data.gpu_vram_used_b / (1024.0 * 1024.0);
+    double total_mib = (double)shared_data.gpu_vram_total_b / (1024.0 * 1024.0);
+    tb_printf(x, y++, TB_DEFAULT, TB_DEFAULT, "VRAM: %.0f MiB / %.0f MiB", used_mib, total_mib);
+  }
+
+  y++;
+  int spark_w = w - 12;
+  if (spark_w > 10) {
+    tb_printf(x, y, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "Util hist");
+    draw_sparkline(x, y + 1, w, shared_data.gpu_list, 100);
+    y += 3;
+
+    tb_printf(x, y, TB_DEFAULT | TB_BOLD, TB_DEFAULT, "Temp hist");
+    draw_sparkline(x, y + 1, w, shared_data.gpu_temp_list, 100);
+  }
 }
 
 static void render_process_view(int width, int height) {
@@ -656,9 +1007,11 @@ void cleanup_resources() {
   
   // Free lists
   list_free(shared_data.cpu_list);
+  list_free(shared_data.cpu_temp_list);
   list_free(shared_data.mem_list);
   list_free(shared_data.gpu_list);
   list_free(shared_data.vram_list);
+  list_free(shared_data.gpu_temp_list);
   list_free(shared_data.net_up_list);
   list_free(shared_data.net_down_list);
   

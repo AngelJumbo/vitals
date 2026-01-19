@@ -152,6 +152,107 @@ static int read_nvidia_smi(int *gpu_util_percent, unsigned long long *mem_used_b
   return 1;
 }
 
+static int read_nvidia_smi_ext(int *gpu_util_percent, unsigned long long *mem_used_bytes, unsigned long long *mem_total_bytes, int *temp_c) {
+  FILE *fp = popen("nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu --format=csv,noheader,nounits 2>/dev/null", "r");
+  if (!fp) return 0;
+
+  char line[256];
+  if (!fgets(line, sizeof(line), fp)) {
+    pclose(fp);
+    return 0;
+  }
+  pclose(fp);
+
+  int util = -1;
+  unsigned long long used_mib = 0, total_mib = 0;
+  int temp = -1;
+
+  if (sscanf(line, " %d , %llu , %llu , %d", &util, &used_mib, &total_mib, &temp) != 4) {
+    return 0;
+  }
+
+  if (util < 0) util = 0;
+  if (util > 100) util = 100;
+  if (temp < 0 || temp > 150) temp = -1;
+
+  *gpu_util_percent = util;
+  *mem_used_bytes = used_mib * 1024ULL * 1024ULL;
+  *mem_total_bytes = total_mib * 1024ULL * 1024ULL;
+  *temp_c = temp;
+  return 1;
+}
+
+static int read_gpu_temp_sysfs(float *out_c) {
+  if (!gpu_ctx.available) return 0;
+
+  // Many DRM drivers expose temperature via hwmon under the device.
+  char hwmon_dir[PATH_MAX];
+  snprintf(hwmon_dir, sizeof(hwmon_dir), "%s/hwmon", gpu_ctx.device_path);
+  DIR *dir = opendir(hwmon_dir);
+  if (!dir) return 0;
+
+  struct dirent *ent;
+  while ((ent = readdir(dir)) != NULL) {
+    if (strncmp(ent->d_name, "hwmon", 5) != 0) continue;
+
+    char temp_path[PATH_MAX];
+    snprintf(temp_path, sizeof(temp_path), "%s/%s/temp1_input", hwmon_dir, ent->d_name);
+
+    unsigned long long v = 0;
+    if (read_file_ull(temp_path, &v)) {
+      float c = (float)v / 1000.0f;
+      if (c >= 0 && c <= 150) {
+        *out_c = c;
+        closedir(dir);
+        return 1;
+      }
+    }
+  }
+  closedir(dir);
+  return 0;
+}
+
+int gpu_read_stats_ex(float *gpu_util_percent, float *vram_percent,
+                      unsigned long long *vram_used_bytes, unsigned long long *vram_total_bytes,
+                      float *temp_c) {
+  gpu_try_init();
+  if (!gpu_ctx.available) return -1;
+
+  int util_i = -1;
+  unsigned long long used_b = 0, total_b = 0;
+  float temp = -1;
+
+  // Prefer sysfs util (AMD/Intel)
+  if (read_gpu_busy_percent_sysfs(&util_i)) {
+    (void)read_vram_sysfs(&used_b, &total_b);
+    (void)read_gpu_temp_sysfs(&temp);
+  } else if (gpu_ctx.vendor_id == 0x10de) {
+    int temp_i = -1;
+    if (read_nvidia_smi_ext(&util_i, &used_b, &total_b, &temp_i)) {
+      if (temp_i >= 0) temp = (float)temp_i;
+    } else {
+      // fallback to older query (no temp)
+      (void)read_nvidia_smi(&util_i, &used_b, &total_b);
+    }
+  }
+
+  float util = (util_i >= 0) ? (float)util_i : -1;
+  float vram = -1;
+  if (total_b > 0) {
+    double p = (double)used_b * 100.0 / (double)total_b;
+    if (p < 0) p = 0;
+    if (p > 100) p = 100;
+    vram = (float)p;
+  }
+
+  if (gpu_util_percent) *gpu_util_percent = util;
+  if (vram_percent) *vram_percent = vram;
+  if (vram_used_bytes) *vram_used_bytes = used_b;
+  if (vram_total_bytes) *vram_total_bytes = total_b;
+  if (temp_c) *temp_c = temp;
+  return 0;
+}
+
 float gpu_perc() {
   gpu_try_init();
   if (!gpu_ctx.available) return -1;
